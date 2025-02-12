@@ -12,4 +12,4 @@ import pandas as pd
 
 # You can also define package-level variables or functions here
 __version__ = "1.0.0"
-__author__ = "Joshua Ludolf"
+__author__ = "Alexander James, Joshua Ludolf, & Matthew Trevino"
