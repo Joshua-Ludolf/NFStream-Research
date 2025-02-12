@@ -1,4 +1,4 @@
-# Computer-Security
+# NFStream-GUI
 
 ## Project Overview
 
