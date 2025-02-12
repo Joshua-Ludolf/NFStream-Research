@@ -35,7 +35,7 @@ jupyter notebook demo.ipynb
 ### Running the Python Script
 To run the Python script, use:
 ```bash
-python demo.py
+python demo.py or run the demo.ipynb
 ```
 
 ### Running the GUI
