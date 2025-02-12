@@ -15,7 +15,6 @@ This repository contains various scripts and tools for analyzing network traffic
 - `requirements.txt`: List of dependencies required for the project.
 - `LICENSE`: GNU General Public License for the project.
 - `GUI/`: Directory containing the GUI implementation for NFStream.
-- `Computer-Security/`: Directory containing various scripts and tools for computer security.
 
 ## Installation
 
