@@ -12,7 +12,7 @@ class NFStreamGUI:
         self.root.geometry("800x600")
         
         self.style = ttk.Style()
-        self.style.theme_use('clam')  # Set default theme
+        self.style.theme_use('default')  # Set default theme
         
         self.label = ttk.Label(root, text="Select a PCAP or PCAPNG file:")
         self.label.pack(pady=10)
