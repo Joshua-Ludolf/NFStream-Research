@@ -1,13 +1,11 @@
 from nfstream import NFStreamer
 import pandas as pd
-import numpy
 import os
 import time
 import platform
-import sys
 import pyshark
-from scapy.all import rdpcap, wrpcap, PcapWriter, sniff
-import asyncio
+from scapy.all import rdpcap, wrpcap, sniff
+
 
 def get_interfaces():
     """Get network interfaces in a cross-platform way"""

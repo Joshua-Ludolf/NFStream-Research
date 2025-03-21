@@ -1,8 +1,10 @@
 from GUI.__init__ import *
+from scapy.all import rdpcap
+import pyshark
 
 class NFStreamGUI:
     '''
-        Graphical User Interface for NFStream
+        Graphical User Interface for NFStream, Scapy, and Pyshark
     '''
     def __init__(self, root):
         self.root = root
@@ -18,8 +20,15 @@ class NFStreamGUI:
         self.file_button = ttk.Button(root, text="Browse", command=self.browse_file)
         self.file_button.pack(pady=5)
         
-        self.run_button = ttk.Button(root, text="Run NFStreamer", command=self.run_nfstreamer)
+        self.run_button = ttk.Button(root, text="Run Analysis", command=self.run_analysis)
         self.run_button.pack(pady=20)
+        
+        self.library_label = ttk.Label(root, text="Select Library:")
+        self.library_label.pack(pady=5)
+        
+        self.library_combobox = ttk.Combobox(root, values=["NFStream", "Scapy", "Pyshark"], state="readonly")
+        self.library_combobox.pack(pady=5)
+        self.library_combobox.set("NFStream")
         
         self.theme_label = ttk.Label(root, text="Select Theme:")
         self.theme_label.pack(pady=5)
@@ -49,20 +58,44 @@ class NFStreamGUI:
         if self.file_path:
             self.label.config(text=f"Selected file: {os.path.basename(self.file_path)}")
 
-    def run_nfstreamer(self):
+    def run_analysis(self):
         if not self.file_path:
             messagebox.showerror("Error", "No file selected!")
             return
-        
+
+        selected_library = self.library_combobox.get()
+
         try:
-            streamer = NFStreamer(source=self.file_path)
-            df = streamer.to_pandas()
-            
-            self.display_dataframe(df)
-            
-            messagebox.showinfo("Success", f"Processed {len(df)} flows.")
+            if selected_library == "NFStream":
+                self.run_nfstreamer()
+            elif selected_library == "Scapy":
+                self.run_scapy()
+            elif selected_library == "Pyshark":
+                self.run_pyshark()
+            else:
+                messagebox.showerror("Error", "Invalid library selected!")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    def run_nfstreamer(self):
+        streamer = NFStreamer(source=self.file_path)
+        df = streamer.to_pandas()
+        self.display_dataframe(df)
+        messagebox.showinfo("Success", f"Processed {len(df)} flows using NFStream.")
+
+    def run_scapy(self):
+        packets = rdpcap(self.file_path)
+        data = [{"Packet": i, "Summary": pkt.summary()} for i, pkt in enumerate(packets)]
+        df = pd.DataFrame(data)
+        self.display_dataframe(df)
+        messagebox.showinfo("Success", f"Processed {len(packets)} packets using Scapy.")
+
+    def run_pyshark(self):
+        capture = pyshark.FileCapture(self.file_path)
+        data = [{"Packet": i, "Summary": str(pkt)} for i, pkt in enumerate(capture)]
+        df = pd.DataFrame(data)
+        self.display_dataframe(df)
+        messagebox.showinfo("Success", f"Processed {len(data)} packets using Pyshark.")
 
     def display_dataframe(self, df):
         self.tree.delete(*self.tree.get_children())
@@ -93,11 +126,3 @@ class NFStreamGUI:
     def change_theme(self, event):
         selected_theme = self.theme_combobox.get()
         self.style.theme_use(selected_theme)
-
-def main():
-    root = tk.Tk()
-    app = NFStreamGUI(root)
-    root.mainloop()
-
-if __name__ == "__main__":
-    main()

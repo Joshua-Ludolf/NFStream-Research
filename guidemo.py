@@ -1,4 +1,4 @@
-from GUI.gui import NFStreamGUI, tk
+from GUI.gui import *
 
 def run_gui():
     root = tk.Tk()
