@@ -1,3 +1,8 @@
+'''
+This script is used to run the NFStream GUI application. It initializes the main window and starts the Tkinter main loop.
+It imports the NFStreamGUI class from the GUI module and creates an instance of it to display the GUI.
+'''
+
 from GUI.gui import *
 
 def run_gui():
@@ -7,5 +12,4 @@ def run_gui():
 
 if __name__ == "__main__":
     run_gui()
-    # help(NFStreamGUI)
-    # print(NFStreamGUI.__doc__)
+    
