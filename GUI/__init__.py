@@ -3,6 +3,8 @@ from tkinter import filedialog, messagebox, ttk
 import os
 from nfstream import NFStreamer
 import pandas as pd
+from scapy.all import rdpcap
+import pyshark
 
 # __init__.py
 

@@ -1,6 +1,4 @@
 from GUI.__init__ import *
-from scapy.all import rdpcap
-import pyshark
 
 class NFStreamGUI:
     '''
