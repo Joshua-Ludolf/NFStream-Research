@@ -1,10 +1,22 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-import os
-from nfstream import NFStreamer
+from tkinter import messagebox, filedialog, ttk, scrolledtext
+import threading
+import time
 import pandas as pd
-from scapy.all import rdpcap
+import numpy as np
+from datetime import datetime
+import os
+import ipaddress
+import re
+from nfstream import NFStreamer
 import pyshark
+from scapy.all import *
+from scapy.layers.inet import IP, TCP, UDP
+from scapy.sendrecv import send
+import psutil
+import socket
+import uuid
+import asyncio
 
 # __init__.py
 
@@ -14,4 +26,4 @@ import pyshark
 
 # You can also define package-level variables or functions here
 __version__ = "1.0.0"
-__author__ = "Alexander James, Joshua Ludolf, & Matthew Trevino"
+__authors__ = "Alexander James, Joshua Ludolf, & Matthew Trevino"
