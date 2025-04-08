@@ -6,15 +6,22 @@ This repository contains various scripts and tools for analyzing network traffic
 
 - **NFStream Code Walkthrough**: Demonstrates how to use the NFStreamer class to read a pcap file and print the flows using NFStream.
 - **Graphical User Interface (GUI)**: Provides a user-friendly interface for selecting and analyzing pcap files using NFStream.
+- **Threat Detection**: Built-in capabilities to detect suspicious patterns, malicious IP addresses, and anomalous network behavior.
+- **Alert Trigger System**: A script for generating test traffic to demonstrate alert capabilities.
 
 ## Files and Directories
 
-- `demo.ipynb`: Jupyter notebook demonstrating the usage of NFStream.
-- `demo.py`: Python script demonstrating the usage of NFStream.
+- `main.py`: Main Python script for network analysis functionality.
 - `guidemo.py`: Python script to run the GUI for NFStream.
+- `trigger_alert.py`: Script for generating test traffic to trigger and demonstrate alert capabilities.
+- `demo.pcap` and `wifi.pcap`: Sample packet capture files for analysis.
+- `milestone-1-Alexander James, Joshua Ludolf, and Matthew Trevino.ipynb`: First milestone Jupyter notebook.
+- `Milestone-2-Alexander James, Joshua Ludolf, and Matthew Trevino.ipynb`: Second milestone Jupyter notebook.
 - `requirements.txt`: List of dependencies required for the project.
 - `LICENSE`: GNU General Public License for the project.
-- `GUI/`: Directory containing the GUI implementation for NFStream.
+- `GUI/`: Directory containing the GUI implementation for NFStream:
+  - `__init__.py`: Package initialization file with imports and version information.
+  - `gui.py`: Main GUI implementation with NetworkMonitor class for traffic analysis and threat detection.
 
 ## Installation
 
