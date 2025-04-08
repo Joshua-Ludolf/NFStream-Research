@@ -562,10 +562,14 @@ class NetworkMonitor:
             
             # Use non-async direct capture approach to avoid event loop conflicts
             try:
-                # Configure PyShark without an event loop
+                # Configure PyShark with a proper event loop
                 print(f"Initializing PyShark capture on interface: {interface_name}")
                 
-                # Use simple, non-async LiveCapture without an event loop
+                # Create a new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Use simple LiveCapture with the new event loop
                 capture = pyshark.LiveCapture(
                     interface=interface_name,
                     use_json=True,
@@ -574,8 +578,8 @@ class NetworkMonitor:
                     debug=False  # Disable debug to reduce console spam
                 )
                 
-                # Process packets in a simpler way that doesn't rely on asyncio
-                self._capture_packets_simple_nonasync(capture)
+                # Process packets using the event loop
+                self._capture_packets_with_loop(capture, loop)
                 
             except Exception as inner_e:
                 print(f"PyShark capture failed: {inner_e}")
@@ -588,8 +592,55 @@ class NetworkMonitor:
             error_msg = str(e)
             if self.is_monitoring:  # Only show error if still monitoring
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"PyShark error: {msg}"))
-    
-    
+
+
+    def _capture_packets_with_loop(self, capture, loop):
+        """Capture packets using the provided event loop"""
+        try:
+            # Use a more traditional approach without nested async functions
+            # This avoids the 'object has no attribute' issue
+            while self.is_monitoring:
+                try:
+                    # Capture a small batch of packets with timeout
+                    capture.sniff(packet_count=5, timeout=1)
+
+                    # Process the captured packets synchronously
+                    for packet in list(capture._packets):
+                        if not self.is_monitoring:
+                            break
+                        # Process each packet
+                        self.analyze_packet(packet)
+
+                    # Clear packets after processing to avoid memory buildup
+                    if hasattr(capture, '_packets'):
+                        capture._packets.clear()
+
+                    # Small delay to prevent CPU spinning
+                    time.sleep(0.1)
+
+                except KeyboardInterrupt:
+                    break  # Allow clean exit on Ctrl+C
+                except Exception as e:
+                    # Print error but continue monitoring
+                    print(f"Packet capture error: {e}")
+                    time.sleep(1)  # Avoid tight loop on errors
+                    if not self.is_monitoring:
+                        break
+        
+        except Exception as e:
+            print(f"Fatal error in packet capture with loop: {e}")
+            if self.is_monitoring:
+                error_msg = str(e)
+                self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Packet capture error: {msg}"))
+
+    # Keep the original methods for compatibility with other code that might use them
+    def _capture_packets_simple(self, capture, loop=None):
+        """Legacy method - now forwards to the loop version if a loop is provided, otherwise non-async version"""
+        if loop:
+            self._capture_packets_with_loop(capture, loop)
+        else:
+            self._capture_packets_simple_nonasync(capture)
+
     def _capture_packets_simple_nonasync(self, capture):
         """Simple non-async capture method to avoid event loop conflicts"""
         try:
@@ -641,11 +692,6 @@ class NetworkMonitor:
                 error_msg = str(e)
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Packet capture error: {msg}"))
                 
-    # Keep the original method for compatibility with other code that might use it
-    def _capture_packets_simple(self, capture, loop=None):
-        """Legacy method - now just forwards to the non-async version to avoid event loop issues"""
-        self._capture_packets_simple_nonasync(capture)
-    
     def analyze_packet(self, packet):
         """Analyze a packet for security issues and update UI"""
         try:
