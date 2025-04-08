@@ -25,6 +25,7 @@ class NetworkMonitor:
         self.load_threat_intelligence()
         
         self.setup_ui()
+
     
     def load_threat_intelligence(self):
         """Load known malicious IPs and patterns from multiple sources"""
@@ -100,6 +101,7 @@ class NetworkMonitor:
             r"\.(exe|dll|bat|cmd|ps1|vbs|js)$"
         ]
         self.suspicious_patterns.extend(builtin_patterns)
+
     
     def _load_threat_files(self):
         """Load threat intelligence from local files"""
@@ -173,6 +175,7 @@ class NetworkMonitor:
                                     print(f"Invalid regex pattern: {line}")
                     except Exception as e:
                         print(f"Error loading pattern file {file_path}: {e}")
+
     
     def check_threat_indicators(self, ip=None, domain=None, file_hash=None, content=None):
         """Check if indicators match known threats"""
@@ -201,6 +204,7 @@ class NetworkMonitor:
         
         return results
     
+    
     def setup_ui(self):
         """Set up the user interface"""
         # Create notebook for tabs
@@ -221,16 +225,11 @@ class NetworkMonitor:
         self.control_frame = ttk.Frame(self.root)
         self.control_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # Get interface info but don't display dropdown
-        self.get_interface_info()
-        
         # Create a fixed Wi-Fi interface with hardcoded values
         self.interface = {
             'nfstream_name': "Intel(R) Wi-Fi 6 AX201 160MHz",
             'pyshark_name': "Wi-Fi",
-            'scapy_name': "Wi-Fi",
-            'mac_address': "Unknown",
-            'ip_address': "Unknown"
+            'scapy_name': "Intel(R) Wi-Fi 6 AX201 160MHz"
         }
         
         # Show which interface we're using
@@ -249,18 +248,10 @@ class NetworkMonitor:
         self.setup_packets_tab()
         self.setup_alerts_tab()
         self.setup_config_tab()
-    
+
+
     def setup_flows_tab(self):
         """Set up the Network Flows tab with NFStream data"""
-        # Create frame for filters
-        filter_frame = ttk.Frame(self.flows_tab)
-        filter_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT, padx=5)
-        self.flow_filter_entry = ttk.Entry(filter_frame, width=40)
-        self.flow_filter_entry.pack(side=tk.LEFT, padx=5)
-        ttk.Button(filter_frame, text="Apply", command=self.apply_flow_filter).pack(side=tk.LEFT, padx=5)
-        
         # Create treeview for flows
         self.flows_tree = ttk.Treeview(self.flows_tab)
         self.flows_tree["columns"] = ("time", "src_ip", "dst_ip", "protocol", "src_port", "dst_port", "packets", "bytes", "duration", "risk")
@@ -284,6 +275,7 @@ class NetworkMonitor:
         flow_y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         flow_x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.flows_tree.pack(fill=tk.BOTH, expand=True)
+
     
     def setup_packets_tab(self):
         """Set up the Packet Analysis tab with Pyshark data"""
@@ -328,6 +320,7 @@ class NetworkMonitor:
         # Packet details text area
         self.packet_details_text = scrolledtext.ScrolledText(packet_detail_frame)
         self.packet_details_text.pack(fill=tk.BOTH, expand=True)
+
     
     def setup_alerts_tab(self):
         """Set up the Alerts & Response tab"""
@@ -402,6 +395,7 @@ class NetworkMonitor:
         
         # Unblock button
         ttk.Button(blocked_frame, text="Unblock Selected", command=self.unblock_selected_ip).pack(anchor=tk.E, padx=10, pady=5)
+
     
     def setup_config_tab(self):
         """Set up the Configuration tab"""
@@ -448,98 +442,8 @@ class NetworkMonitor:
         
         # Save button
         ttk.Button(self.config_tab, text="Save Configuration", command=self.save_configuration).pack(pady=10)
-    
-    def get_interface_info(self):
-        """Get detailed information about network interfaces with friendly names"""
-        self.interface_info = {}  # Reset interface info
-        
-        try:
-            # Use psutil to get network interfaces - already imported in __init__.py
-            for iface, addrs in psutil.net_if_addrs().items():
-                # Skip non-active interfaces
-                if not self.is_interface_up(iface, addrs):
-                    continue
-                
-                # Get IPv4 and MAC addresses
-                ip_addr = "No IP"
-                mac_addr = "Unknown"
-                for addr in addrs:
-                    if addr.family == socket.AF_INET:  # IPv4
-                        ip_addr = addr.address
-                    elif addr.family == psutil.AF_LINK:  # MAC address
-                        mac_addr = addr.address
-                
-                # Build friendly name
-                friendly_name = f"{self.get_interface_friendly_name(iface)} ({iface}: {ip_addr})"
-                
-                # Store mapping between friendly name and actual identifiers
-                self.interface_info[friendly_name] = {
-                    'scapy_name': iface,          # Name for Scapy
-                    'pyshark_name': iface,        # Name for PyShark
-                    'nfstream_name': iface,       # Name for NFStream
-                    'mac_address': mac_addr,
-                    'ip_address': ip_addr
-                }
-                
-                # Special case for Windows - PyShark often uses "Wi-Fi" instead of interface name
-                if "wireless" in iface.lower() or "wi-fi" in iface.lower() or "wlan" in iface.lower():
-                    self.interface_info[friendly_name]['pyshark_name'] = "Wi-Fi"
-                elif "ethernet" in iface.lower() or "eth" in iface.lower():
-                    self.interface_info[friendly_name]['pyshark_name'] = "Ethernet"
-                
-        except Exception as e:
-            print(f"Error getting interfaces: {e}")
-            # Fallback to default interfaces
-            hostname = socket.gethostname()
-            try:
-                local_ip = socket.gethostbyname(hostname)
-            except:
-                local_ip = "Unknown"
-            
-            mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
-                  for elements in range(0, 8*6, 8)][::-1])
-            
-            self.interface_info = {
-                "Default Network Interface": {
-                    'scapy_name': None, 
-                    'pyshark_name': None, 
-                    'nfstream_name': None,
-                    'mac_address': mac,
-                    'ip_address': local_ip
-                }
-            }
-    
-    def get_interface_friendly_name(self, iface):
-        """Convert technical interface name to a friendly name"""
-        friendly_names = {
-            'eth': 'Ethernet',
-            'en': 'Ethernet',
-            'wlan': 'Wi-Fi',
-            'wlp': 'Wi-Fi',
-            'wl': 'Wi-Fi',
-            'ppp': 'Cellular',
-            'usb': 'USB',
-            'tun': 'VPN Tunnel',
-            'vmnet': 'Virtual',
-            'docker': 'Docker',
-            'br': 'Bridge',
-            'veth': 'Virtual Ethernet'
-        }
-        
-        # Try to find a match at the beginning of the interface name
-        for prefix, name in friendly_names.items():
-            if iface.startswith(prefix):
-                return name
-        
-        # Special case for Windows-style interface names
-        if 'wireless' in iface.lower() or 'wi-fi' in iface.lower():
-            return 'Wi-Fi'
-        elif 'ethernet' in iface.lower() or 'local area connection' in iface.lower():
-            return 'Ethernet'
-        
-        # If no match found, use the technical name
-        return f'Interface'
-    
+
+
     def is_interface_up(self, iface, addrs=None):
         """Check if an interface is up and active"""
         try:
@@ -553,13 +457,16 @@ class NetworkMonitor:
             return False
         except Exception:
             return False
-    
+        
+
     def toggle_monitoring(self):
         """Start or stop the monitoring process"""
         if self.is_monitoring:
             self.stop_monitoring()
         else:
             self.start_monitoring()
+
+
     def start_monitoring(self):
         """Start the network monitoring process"""
         # Interface is already configured as Wi-Fi
@@ -582,6 +489,7 @@ class NetworkMonitor:
         self.monitor_thread = threading.Thread(target=self.monitoring_loop)
         self.monitor_thread.daemon = True
         self.monitor_thread.start()
+
     
     def stop_monitoring(self):
         """Stop the network monitoring process"""
@@ -592,6 +500,7 @@ class NetworkMonitor:
         # Wait for thread to finish
         if self.monitor_thread:
             self.monitor_thread.join(timeout=1.0)
+
     
     def monitoring_loop(self):
         """Main monitoring loop running in a separate thread"""
@@ -613,6 +522,7 @@ class NetworkMonitor:
             print(f"Error in monitoring loop: {e}")
             self.root.after(0, lambda: messagebox.showerror("Error", f"Monitoring error: {str(e)}"))
             self.root.after(0, self.stop_monitoring)
+
     
     def nfstream_monitor(self):
         """NFStream monitoring process"""
@@ -640,43 +550,101 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error in NFStream monitoring: {e}")
             error_msg = str(e)
-            self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"NFStream error: {msg}"))
+            self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"NFStream error: {msg}"))      
+              
     
     def pyshark_monitor(self):
         """Pyshark monitoring process for detailed packet analysis"""
         try:
+            # Only create a single capture instance to avoid spawning too many dumpcap processes
             interface_name = self.interface['pyshark_name']
             print(f"Starting PyShark monitoring on interface: {interface_name}")
-
-            # Create a Pyshark capture for detailed packet analysis
-            capture = pyshark.LiveCapture(interface=interface_name)
             
-            # Set up a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Run the capture with the new event loop
-            loop.run_until_complete(self._capture_packets(capture))
-            loop.close()
-
+            # Use non-async direct capture approach to avoid event loop conflicts
+            try:
+                # Configure PyShark without an event loop
+                print(f"Initializing PyShark capture on interface: {interface_name}")
+                
+                # Use simple, non-async LiveCapture without an event loop
+                capture = pyshark.LiveCapture(
+                    interface=interface_name,
+                    use_json=True,
+                    include_raw=False,
+                    output_file=None,  # Don't save to file
+                    debug=False  # Disable debug to reduce console spam
+                )
+                
+                # Process packets in a simpler way that doesn't rely on asyncio
+                self._capture_packets_simple_nonasync(capture)
+                
+            except Exception as inner_e:
+                print(f"PyShark capture failed: {inner_e}")
+                # If the first attempt failed, it's better to disable this component than 
+                # to keep trying and creating more processes
+                print("Disabling PyShark monitoring due to initialization error")
+                
         except Exception as e:
-            print(f"Error in Pyshark monitoring: {e}")
+            print(f"Error in PyShark monitoring: {e}")
             error_msg = str(e)
             if self.is_monitoring:  # Only show error if still monitoring
-                self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Pyshark error: {msg}"))
+                self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"PyShark error: {msg}"))
     
-    async def _capture_packets(self, capture):
-        """Async helper for PyShark packet capture"""
+    
+    def _capture_packets_simple_nonasync(self, capture):
+        """Simple non-async capture method to avoid event loop conflicts"""
         try:
-            async for packet in capture.sniff_continuously():
-                if not self.is_monitoring:
-                    break
-                self.analyze_packet(packet)
+            # Define the packet callback function for live capture
+            def packet_callback(packet):
+                if self.is_monitoring:
+                    try:
+                        self.analyze_packet(packet)
+                    except Exception as e:
+                        print(f"Error processing packet: {e}")
+            
+            print("Starting packet capture loop")
+            
+            # Use purely synchronous approach without asyncio
+            while self.is_monitoring:
+                try:
+                    # Capture a small batch of packets with timeout
+                    # This allows us to regularly check if monitoring should stop
+                    # Using very small packet_count to avoid blocking for too long
+                    capture.sniff(packet_count=5, timeout=1)
+                    
+                    # Process the captured packets
+                    for packet in list(capture._packets):
+                        if not self.is_monitoring:
+                            break
+                        packet_callback(packet)
+                    
+                    # Clear packets after processing to avoid memory buildup
+                    if hasattr(capture, '_packets'):
+                        capture._packets.clear()
+                    
+                    # Small delay to prevent CPU spinning
+                    time.sleep(0.1)
+                    
+                except KeyboardInterrupt:
+                    break  # Allow clean exit on Ctrl+C
+                except Exception as e:
+                    # Print error but continue monitoring
+                    print(f"Packet capture error: {e}")
+                    time.sleep(1)  # Avoid tight loop on errors
+                    if not self.is_monitoring:
+                        break
+            
+            print("Packet capture loop ended")
+            
         except Exception as e:
-            print(f"Error in async packet capture: {e}")
+            print(f"Fatal error in packet capture: {e}")
             if self.is_monitoring:
                 error_msg = str(e)
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Packet capture error: {msg}"))
+                
+    # Keep the original method for compatibility with other code that might use it
+    def _capture_packets_simple(self, capture, loop=None):
+        """Legacy method - now just forwards to the non-async version to avoid event loop issues"""
+        self._capture_packets_simple_nonasync(capture)
     
     def analyze_packet(self, packet):
         """Analyze a packet for security issues and update UI"""
@@ -711,6 +679,7 @@ class NetworkMonitor:
             
         except Exception as e:
             print(f"Error analyzing packet: {e}")
+
     
     def add_packet_to_ui(self, packet, packet_data, packet_id):
         """Add packet to the UI"""
@@ -725,6 +694,7 @@ class NetworkMonitor:
         
         # Auto-scroll to show latest
         self.packets_tree.see(item_id)
+
     
     def get_packet_summary(self, packet):
         """Generate a summary of the packet"""
@@ -761,6 +731,7 @@ class NetworkMonitor:
                     summary = f"DNS Response for {packet.dns.resp_name}"
         
         return summary
+    
     
     def check_packet_payload(self, packet, src_ip, dst_ip):
         """Check packet payload for malicious content"""
@@ -805,6 +776,7 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error checking packet payload: {e}")
 
+
     def show_packet_details(self, event):
         """Show detailed information about the selected packet"""
         selected_items = self.packets_tree.selection()
@@ -835,6 +807,7 @@ class NetworkMonitor:
         self.packet_details_text.insert(tk.END, "Detailed protocol information would be displayed here.\n")
         self.packet_details_text.insert(tk.END, "This would include TCP/IP headers, payload samples, etc.")
 
+
     def add_alert(self, alert_details):
         """Add an alert to the alerts tab"""
         # Add to tree
@@ -863,6 +836,7 @@ class NetworkMonitor:
         # Play an alert sound
         self.root.bell()
 
+
     def block_ip(self, ip, reason):
         """Block an IP address"""
         if ip in self.blocked_ips:
@@ -890,6 +864,7 @@ class NetworkMonitor:
         except Exception as e:
             print(f"Error blocking IP: {e}")
 
+
     def unblock_selected_ip(self):
         """Unblock the selected IP address"""
         selected_items = self.blocked_tree.selection()
@@ -908,6 +883,7 @@ class NetworkMonitor:
         self.blocked_tree.delete(item_id)
         
         messagebox.showinfo("Unblock", f"IP {ip} has been unblocked")
+
 
     def execute_response(self):
         """Execute the selected response action for the selected alert"""
@@ -932,33 +908,8 @@ class NetworkMonitor:
             # This would use Scapy to send RST packets
             messagebox.showinfo("Response", f"Reset connections from {src_ip}")
         elif action == "Log Only":
-            messagebox.showinfo("Response", f"Logged activity from {src_ip}")
+            messagebox.showinfo("Response", f"Logged activity from {src_ip}")    # Filter functionality removed as requested
 
-    def apply_flow_filter(self):
-        """Apply filter to the flows view"""
-        filter_text = self.flow_filter_entry.get().lower()
-        if not filter_text:
-            # Clear filter
-            for item in self.flows_tree.get_children():
-                self.flows_tree.item(item, tags=self.flows_tree.item(item, "tags"))
-            return
-        
-        # Apply filter
-        for item in self.flows_tree.get_children():
-            values = self.flows_tree.item(item, "values")
-            # Convert all values to string and check if filter text is in any of them
-            if any(filter_text in str(value).lower() for value in values):
-                # Keep this item visible
-                self.flows_tree.item(item, tags=self.flows_tree.item(item, "tags"))
-            else:
-                # Hide this item by setting a "hidden" tag
-                current_tags = self.flows_tree.item(item, "tags")
-                if isinstance(current_tags, str):
-                    current_tags = (current_tags,)
-                self.flows_tree.item(item, tags=current_tags + ("hidden",))
-        
-        # Configure hidden tag to be invisible
-        self.flows_tree.tag_configure("hidden", foreground="#ffffff", background="#ffffff")
     
     def add_malicious_ip(self):
         """Add a custom IP to the malicious IP list"""
@@ -983,6 +934,7 @@ class NetworkMonitor:
             
         except ValueError:
             messagebox.showerror("Error", "Invalid IP address format")
+
     
     def save_configuration(self):
         """Save the current configuration"""
@@ -1000,6 +952,7 @@ class NetworkMonitor:
         except ValueError as ve:
             messagebox.showerror("Error", "Please enter valid numbers for all thresholds")
             print(f"Configuration error: {ve}")
+
     
     def analyze_flow(self, flow):
         """Analyze a network flow for security issues"""
@@ -1050,6 +1003,7 @@ class NetworkMonitor:
         
         # Cap risk score at 100
         return min(100, risk_score)
+    
     
     def update_flow_ui(self, flow, risk_score):
         """Update the UI with flow information"""
