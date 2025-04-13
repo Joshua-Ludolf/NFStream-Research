@@ -20,6 +20,138 @@ class NetworkMonitor:
         self.interface_info = {}  # Will store mapping between friendly names and technical identifiers
         self.malicious_ips = set()
         self.blocked_ips = set()
+        self.packet_store = {}    # Store packet objects by ID for later reference
+        
+        # Track active PyShark captures and their event loops for clean shutdown
+        self.active_captures = []
+        self.active_captures_lock = threading.Lock()
+        
+        # Protocol mapping dictionary - comprehensive list of IP protocols
+        self.protocol_map = {
+            0: "HOPOPT",
+            1: "ICMP",
+            2: "IGMP",
+            3: "GGP",
+            4: "IPv4",
+            5: "ST",
+            6: "TCP",
+            7: "CBT",
+            8: "EGP",
+            9: "IGP",
+            10: "BBN-RCC-MON",
+            11: "NVP-II",
+            12: "PUP",
+            13: "ARGUS",
+            14: "EMCON",
+            15: "XNET",
+            16: "CHAOS",
+            17: "UDP",
+            58: "ICMPv6",
+            47: "GRE",
+            48: "DSR",
+            49: "BNA",
+            50: "ESP",
+            51: "AH",
+            52: "I-NLSP",
+            53: "SWIPE",
+            54: "NARP",
+            55: "MOBILE",
+            56: "TLSP",
+            57: "SKIP",
+            58: "IPv6-ICMP",
+            59: "IPv6-NoNxt",
+            60: "IPv6-Opts",
+            61: "Any host internal protocol",
+            62: "CFTP",
+            63: "Any local network",
+            64: "SAT-EXPAK",
+            65: "KRYPTOLAN",
+            66: "RVD",
+            67: "IPPC",
+            68: "Any distributed file system",
+            69: "SAT-MON",
+            70: "VISA",
+            71: "IPCV",
+            72: "CPNX",
+            73: "CPHB",
+            74: "WSN",
+            75: "PVP",
+            76: "BR-SAT-MON",
+            77: "SUN-ND",
+            78: "WB-MON",
+            79: "WB-EXPAK",
+            80: "ISO-IP",
+            81: "VMTP",
+            82: "SECURE-VMTP",
+            83: "VINES",
+            84: "TTP",
+            85: "NSFNET-IGP",
+            86: "DGP",
+            87: "TCF",
+            88: "EIGRP",
+            89: "OSPF",
+            90: "Sprite-RPC",
+            91: "LARP",
+            92: "MTP",
+            93: "AX.25",
+            94: "IPIP",
+            95: "MICP",
+            96: "SCC-SP",
+            97: "ETHERIP",
+            98: "ENCAP",
+            99: "Any private encryption scheme",
+            100: "GMTP",
+            101: "IFMP",
+            102: "PNNI",
+            103: "PIM",
+            104: "ARIS",
+            105: "SCPS",
+            106: "QNX",
+            107: "A/N",
+            108: "IPComp",
+            109: "SNP",
+            110: "Compaq-Peer",
+            111: "IPX-in-IP",
+            112: "VRRP",
+            113: "PGM",
+            114: "Any 0-hop protocol",
+            115: "L2TP",
+            116: "DDX",
+            117: "IATP",
+            118: "STP",
+            119: "SRP",
+            120: "UTI",
+            121: "SMP",
+            122: "SM",
+            123: "PTP",
+            124: "ISIS over IPv4",
+            125: "FIRE",
+            126: "CRTP",
+            127: "CRUDP",
+            128: "SSCOPMCE",
+            129: "IPLT",
+            130: "SPS",
+            131: "PIPE",
+            132: "SCTP",
+            133: "FC",
+            134: "RSVP-E2E-IGNORE",
+            135: "Mobility Header",
+            136: "UDPLite",
+            137: "MPLS-in-IP",
+            138: "manet",
+            139: "HIP",
+            140: "Shim6",
+            141: "WESP",
+            142: "ROHC",
+            143: "Ethernet",
+            144: "AGGFRAG",
+            145: "NSH",
+            146: "Fast LWE",
+            239: "HIP",
+            253: "Experimental",
+            254: "Experimental",
+            255: "Reserved"
+        }
         
         # Load threat intelligence
         self.load_threat_intelligence()
@@ -312,14 +444,16 @@ class NetworkMonitor:
         
         packet_y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         packet_x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
-        self.packets_tree.pack(fill=tk.BOTH, expand=True)
-        
-        # Bind selection event to show details
+        self.packets_tree.pack(fill=tk.BOTH, expand=True)        # Bind selection event to show details
         self.packets_tree.bind("<<TreeviewSelect>>", self.show_packet_details)
         
-        # Packet details text area
-        self.packet_details_text = scrolledtext.ScrolledText(packet_detail_frame)
+        # Packet details text area - create with normal state initially
+        self.packet_details_text = scrolledtext.ScrolledText(packet_detail_frame, wrap=tk.WORD)
         self.packet_details_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Make it read-only by binding key events instead of disabling
+        self.packet_details_text.bind("<Key>", lambda e: "break")  # Prevent typing
+        self.packet_details_text.bind("<Control-c>", lambda e: None)  # Allow copy
 
     
     def setup_alerts_tab(self):
@@ -358,13 +492,12 @@ class NetworkMonitor:
         alerts_y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         alerts_x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.alerts_tree.pack(fill=tk.BOTH, expand=True)
-        
-        # Manual response controls
+          # Manual response controls
         response_frame = ttk.Frame(alerts_frame)
         response_frame.pack(fill=tk.X, padx=10, pady=5)
         
         ttk.Label(response_frame, text="Response Action:").pack(side=tk.LEFT)
-        self.response_combobox = ttk.Combobox(response_frame, values=["Block IP", "Reset Connection", "Log Only"], width=15)
+        self.response_combobox = ttk.Combobox(response_frame, values=["Block IP", "Reset Connection", "Log Only"], width=15, state="readonly")
         self.response_combobox.pack(side=tk.LEFT, padx=5)
         self.response_combobox.set("Block IP")
         
@@ -406,26 +539,21 @@ class NetworkMonitor:
         response_frame = ttk.LabelFrame(self.config_tab, text="Response Configuration")
         response_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        # Detection thresholds
-        ttk.Label(detection_frame, text="Max packets per second:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        # Detection thresholds        ttk.Label(detection_frame, text="Max packets per second:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_pps_var = tk.StringVar(value=str(self.thresholds["max_packets_per_second"]))
-        ttk.Entry(detection_frame, textvariable=self.max_pps_var, width=10).grid(row=0, column=1, padx=5, pady=5)
-        
+        ttk.Entry(detection_frame, textvariable=self.max_pps_var, width=10, state="readonly").grid(row=0, column=1, padx=5, pady=5)
         ttk.Label(detection_frame, text="Max connections per minute:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_conn_var = tk.StringVar(value=str(self.thresholds["max_connections_per_minute"]))
-        ttk.Entry(detection_frame, textvariable=self.max_conn_var, width=10).grid(row=1, column=1, padx=5, pady=5)
-        
+        ttk.Entry(detection_frame, textvariable=self.max_conn_var, width=10, state="readonly").grid(row=1, column=1, padx=5, pady=5)
         ttk.Label(detection_frame, text="Max DNS queries per minute:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_dns_var = tk.StringVar(value=str(self.thresholds["max_dns_queries_per_minute"]))
-        ttk.Entry(detection_frame, textvariable=self.max_dns_var, width=10).grid(row=2, column=1, padx=5, pady=5)
-        
+        ttk.Entry(detection_frame, textvariable=self.max_dns_var, width=10, state="readonly").grid(row=2, column=1, padx=5, pady=5)
         ttk.Label(detection_frame, text="Max failed connections:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_failed_var = tk.StringVar(value=str(self.thresholds["max_failed_connections"]))
-        ttk.Entry(detection_frame, textvariable=self.max_failed_var, width=10).grid(row=3, column=1, padx=5, pady=5)
-        
-        # Custom malicious IP input
+        ttk.Entry(detection_frame, textvariable=self.max_failed_var, width=10, state="readonly").grid(row=3, column=1, padx=5, pady=5)
+          # Custom malicious IP input
         ttk.Label(detection_frame, text="Add malicious IP:").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
-        self.new_malicious_ip = ttk.Entry(detection_frame, width=20)
+        self.new_malicious_ip = ttk.Entry(detection_frame, width=20, state="readonly")
         self.new_malicious_ip.grid(row=4, column=1, padx=5, pady=5)
         ttk.Button(detection_frame, text="Add", command=self.add_malicious_ip).grid(row=4, column=2, padx=5, pady=5)
         
@@ -490,51 +618,72 @@ class NetworkMonitor:
         self.monitor_thread.daemon = True
         self.monitor_thread.start()
 
-    
     def stop_monitoring(self):
         """Stop the network monitoring process"""
+        print("Stopping all monitoring activities...")
         self.is_monitoring = False
         self.start_button.config(text="Start Monitoring")
         self.status_label.config(text="Status: Idle")
         
-        # Wait for thread to finish
+        # Clear any pending flow packet analysis requests
+        try:
+            while not self.flow_packet_queue.empty():
+                self.flow_packet_queue.get_nowait()
+        except:
+            pass
+            
+        # Wait for main thread to finish
         if self.monitor_thread:
+            print("Waiting for monitoring thread to finish...")
             self.monitor_thread.join(timeout=1.0)
+            
+        print("Monitoring stopped")
+        self.kill_pyshark_processes()  # Ensure any PyShark processes are terminated
 
-    
     def monitoring_loop(self):
         """Main monitoring loop running in a separate thread"""
         try:
             # Start NFStream for flow analysis
+            # PyShark will be triggered by NFStream for specific flows
             nfstream_thread = threading.Thread(target=self.nfstream_monitor)
             nfstream_thread.daemon = True
             nfstream_thread.start()
             
-            # Start Pyshark for packet analysis
-            pyshark_thread = threading.Thread(target=self.pyshark_monitor)
-            pyshark_thread.daemon = True
-            pyshark_thread.start()
+            # Create queue for flow-to-packet mapping
+            self.flow_packet_queue = queue.Queue()
             
             # Wait for monitoring to stop
             while self.is_monitoring:
                 time.sleep(0.5)
+                
+                # Process any queued flow packet analysis requests
+                try:
+                    while not self.flow_packet_queue.empty():
+                        flow_data = self.flow_packet_queue.get_nowait()
+                        if flow_data:
+                            self.analyze_flow_packets(flow_data)
+                except queue.Empty:
+                    pass
         except Exception as e:
             print(f"Error in monitoring loop: {e}")
             self.root.after(0, lambda: messagebox.showerror("Error", f"Monitoring error: {str(e)}"))
             self.root.after(0, self.stop_monitoring)
 
-    
     def nfstream_monitor(self):
         """NFStream monitoring process"""
         try:
             interface_name = self.interface['nfstream_name']
-            print(f"Starting NFStream monitoring on interface: {interface_name}")
             
             # Create a NFStreamer instance for real-time monitoring
             streamer = NFStreamer(source=interface_name, 
                                 active_timeout=1, 
                                 idle_timeout=30,
-                                accounting_mode=0)  # 0 = online mode
+                                accounting_mode=0,  # 0 = online mode
+                                bpf_filter=None)    # No BPF filter to capture all traffic
+            
+            # Create flow tracking dictionary to correlate flows with packets
+            self.flow_tracking = {}
+            self.flow_tracking_lock = threading.Lock()
             
             # Process flows
             for flow in streamer:
@@ -546,6 +695,33 @@ class NetworkMonitor:
                 
                 # Update the UI
                 self.root.after(0, lambda f=flow, rs=risk_score: self.update_flow_ui(f, rs))
+                  # Queue this flow for packet analysis - less restrictive criteria
+                should_analyze = True  # Default to analyzing all flows to ensure we see activity
+                
+                # Create a flow key for tracking
+                flow_key = self._create_flow_key(flow)
+                
+                print(f"Flow detected: {flow_key} with risk score {risk_score}")
+                
+                # Create message about the flow properties for debugging
+                flow_props = []
+                if hasattr(flow, 'application_name'):
+                    flow_props.append(f"app={flow.application_name}")
+                if hasattr(flow, 'bidirectional_packets'):
+                    flow_props.append(f"packets={flow.bidirectional_packets}")
+                if hasattr(flow, 'bidirectional_bytes'):
+                    flow_props.append(f"bytes={flow.bidirectional_bytes}")
+                
+                print(f"Flow properties: {', '.join(flow_props)}")
+                
+                # Queue for packet analysis
+                self.flow_packet_queue.put({
+                    'flow': flow,
+                    'flow_key': flow_key,
+                    'risk_score': risk_score,
+                    'timestamp': datetime.now()
+                })
+                print(f"Added flow to analysis queue: {flow_key}")
                 
         except Exception as e:
             print(f"Error in NFStream monitoring: {e}")
@@ -721,12 +897,10 @@ class NetworkMonitor:
             self.root.after(0, lambda p=packet, pd=packet_data, pid=packet_id: self.add_packet_to_ui(p, pd, pid))
             
             # Check packet payload for malicious content
-            self.check_packet_payload(packet, src, dst)
-            
+            self.check_packet_payload(packet, src, dst)            
         except Exception as e:
             print(f"Error analyzing packet: {e}")
 
-    
     def add_packet_to_ui(self, packet, packet_data, packet_id):
         """Add packet to the UI"""
         if not self.is_monitoring:
@@ -737,6 +911,9 @@ class NetworkMonitor:
         
         # Store packet reference
         self.packets_tree.item(item_id, tags=(packet_id,))
+        
+        # Store packet object for later reference
+        self.packet_store[packet_id] = packet
         
         # Auto-scroll to show latest
         self.packets_tree.see(item_id)
@@ -773,7 +950,7 @@ class NetworkMonitor:
             if hasattr(packet, 'dns'):
                 if hasattr(packet.dns, 'qry_name'):
                     summary = f"DNS Query for {packet.dns.qry_name}"
-                elif hasattr(packet.dns, 'resp_name'):
+                elif hasattr(packet, 'resp_name'):
                     summary = f"DNS Response for {packet.dns.resp_name}"
         
         return summary
@@ -838,21 +1015,441 @@ class NetworkMonitor:
         # Get packet data
         values = self.packets_tree.item(item_id, "values")
         timestamp, src, dst, protocol, length, info = values
-        
-        # Display basic info
-        self.packet_details_text.insert(tk.END, f"Time: {timestamp}\n")
-        self.packet_details_text.insert(tk.END, f"Source: {src}\n")
-        self.packet_details_text.insert(tk.END, f"Destination: {dst}\n")
-        self.packet_details_text.insert(tk.END, f"Protocol: {protocol}\n")
-        self.packet_details_text.insert(tk.END, f"Length: {length} bytes\n")
-        self.packet_details_text.insert(tk.END, f"Info: {info}\n\n")
-        
-        # Would normally display more packet details here, but we don't have the
-        # actual packet object stored. In a real implementation, we would store
-        # packet objects or their string representations.
-        self.packet_details_text.insert(tk.END, "Detailed protocol information would be displayed here.\n")
-        self.packet_details_text.insert(tk.END, "This would include TCP/IP headers, payload samples, etc.")
 
+        # Retrieve the stored packet object
+        packet = self.packet_store.get(packet_id)
+        
+        if packet is None:
+            self.packet_details_text.insert(tk.END, "Detailed packet information not available.\n")
+            return
+            
+        # Show detailed protocol information
+        self.packet_details_text.insert(tk.END, f"=== Protocol Details ===\n")
+        self.packet_details_text.insert(tk.END, f"Packet ID: {packet_id}\n")
+        self.packet_details_text.insert(tk.END, f"Time: {timestamp}\n")
+        self.packet_details_text.insert(tk.END, f"Length: {length} bytes\n")
+        self.packet_details_text.insert(tk.END, f"Info: {info}\n")
+        self.packet_details_text.insert(tk.END, f"Alert: {self.check_alerts(packet_id)}\n\n")
+        # TCP details
+        if hasattr(packet, 'tcp'):
+
+            self.packet_details_text.insert(tk.END, f"TCP Details:\n")
+            self.packet_details_text.insert(tk.END, f"  Source Port: {packet.tcp.srcport}\n")
+            self.packet_details_text.insert(tk.END, f"  Destination Port: {packet.tcp.dstport}\n")
+              # Show TCP flags - Enhanced flag detection 
+            flags = []
+            
+            # Try multiple flag attribute naming patterns
+            # Pattern 1: flags_syn, flags_ack, etc.
+            flag_names = ['syn', 'ack', 'fin', 'rst', 'psh', 'urg']
+            for flag in flag_names:
+                # Check with flags_ prefix
+                if hasattr(packet.tcp, f'flags_{flag}') and getattr(packet.tcp, f'flags_{flag}') in ['1', True, 1]:
+                    flags.append(flag.upper())
+                # Check with flag_ prefix
+                elif hasattr(packet.tcp, f'flag_{flag}') and getattr(packet.tcp, f'flag_{flag}') in ['1', True, 1]:
+                    flags.append(flag.upper())
+                # Check with no prefix
+                elif hasattr(packet.tcp, flag) and getattr(packet.tcp, flag) in ['1', True, 1]:
+                    flags.append(flag.upper())
+            
+            # Pattern 2: Direct flags attribute that contains all flags
+            if not flags and hasattr(packet.tcp, 'flags'):
+                try:
+                    # Try to interpret as hex
+                    flag_value = str(packet.tcp.flags)
+                    # Common hex representations
+                    if '0x' in flag_value:
+                        flag_int = int(flag_value, 16)
+                        if flag_int & 0x02: flags.append('SYN')
+                        if flag_int & 0x10: flags.append('ACK')
+                        if flag_int & 0x01: flags.append('FIN')
+                        if flag_int & 0x04: flags.append('RST')
+                        if flag_int & 0x08: flags.append('PSH')
+                        if flag_int & 0x20: flags.append('URG')
+                    # String representation like '......S.'
+                    elif len(flag_value) >= 8:
+                        if 'S' in flag_value: flags.append('SYN')
+                        if 'A' in flag_value: flags.append('ACK')
+                        if 'F' in flag_value: flags.append('FIN')
+                        if 'R' in flag_value: flags.append('RST')
+                        if 'P' in flag_value: flags.append('PSH')
+                        if 'U' in flag_value: flags.append('URG')
+                except:
+                    pass
+            
+            if flags:
+                self.packet_details_text.insert(tk.END, f"  Flags: {' '.join(flags)}\n")
+            else:
+                self.packet_details_text.insert(tk.END, f"  Flags: None detected\n")
+            
+            if hasattr(packet.tcp, 'seq'):
+                self.packet_details_text.insert(tk.END, f"  Sequence Number: {packet.tcp.seq}\n")
+            if hasattr(packet.tcp, 'ack'):
+                self.packet_details_text.insert(tk.END, f"  Acknowledgment Number: {packet.tcp.ack}\n")
+            if hasattr(packet.tcp, 'window_size'):
+                self.packet_details_text.insert(tk.END, f"  Window Size: {packet.tcp.window_size}\n")
+
+        # UDP details
+        if hasattr(packet, 'udp'):
+            self.packet_details_text.insert(tk.END, f"UDP Details:\n")
+            self.packet_details_text.insert(tk.END, f"  Source Port: {packet.udp.srcport}\n")
+            self.packet_details_text.insert(tk.END, f"  Destination Port: {packet.udp.dstport}\n")
+            if hasattr(packet.udp, 'length'):
+                self.packet_details_text.insert(tk.END, f"  Length: {packet.udp.length}\n")
+
+        # HTTP details
+        if hasattr(packet, 'http'):
+            self.packet_details_text.insert(tk.END, f"HTTP Details:\n")
+            if hasattr(packet.http, 'request_method'):
+                self.packet_details_text.insert(tk.END, f"  Method: {packet.http.request_method}\n")
+            if hasattr(packet.http, 'request_uri'):
+                self.packet_details_text.insert(tk.END, f"  URI: {packet.http.request_uri}\n")
+            if hasattr(packet.http, 'request_version'):
+                self.packet_details_text.insert(tk.END, f"  Version: {packet.http.request_version}\n")
+            if hasattr(packet.http, 'response_code'):
+                self.packet_details_text.insert(tk.END, f"  Status Code: {packet.http.response_code}\n")
+            if hasattr(packet.http, 'response_phrase'):
+                self.packet_details_text.insert(tk.END, f"  Status: {packet.http.response_phrase}\n")
+            if hasattr(packet.http, 'user_agent'):
+                self.packet_details_text.insert(tk.END, f"  User-Agent: {packet.http.user_agent}\n")
+            if hasattr(packet.http, 'host'):
+                self.packet_details_text.insert(tk.END, f"  Host: {packet.http.host}\n")
+                  # DNS details
+        if hasattr(packet, 'dns'):
+            self.packet_details_text.insert(tk.END, f"DNS Details:\n")
+            
+            # Get all available attributes for DNS
+            dns_attributes = dir(packet.dns)
+            displayed_something = False
+            
+            # Check common DNS attributes
+            if hasattr(packet.dns, 'qry_name'):
+                self.packet_details_text.insert(tk.END, f"  Query: {packet.dns.qry_name}\n")
+                displayed_something = True
+            if hasattr(packet.dns, 'qry_type'):
+                self.packet_details_text.insert(tk.END, f"  Query Type: {packet.dns.qry_type}\n")
+                displayed_something = True
+            if hasattr(packet.dns, 'resp_name'):
+                self.packet_details_text.insert(tk.END, f"  Response: {packet.dns.resp_name}\n")
+                displayed_something = True
+            if hasattr(packet.dns, 'resp_type'):
+                self.packet_details_text.insert(tk.END, f"  Response Type: {packet.dns.resp_type}\n")
+                displayed_something = True
+                
+            # Add any other useful DNS attributes that might be present
+            for attr in ['flags', 'id', 'count_queries', 'count_answers', 'dns_time']:
+                if attr in dns_attributes:
+                    value = getattr(packet.dns, attr)
+                    if value:
+                        self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
+                        displayed_something = True
+            
+            # If no attributes were displayed, show a message
+            if not displayed_something:
+                self.packet_details_text.insert(tk.END, f"  [DNS packet detected but no detailed fields available]\n")        # ICMP and ICMPv6 details
+        if hasattr(packet, 'icmpv6'):
+            self.packet_details_text.insert(tk.END, f"ICMPv6 Details:\n")
+            if hasattr(packet.icmpv6, 'type'):
+                icmp_type = packet.icmpv6.type
+                # ICMPv6 type descriptions
+                icmpv6_types = {
+                    "1": "Destination Unreachable",
+                    "2": "Packet Too Big",
+                    "3": "Time Exceeded",
+                    "4": "Parameter Problem", 
+                    "128": "Echo Request",
+                    "129": "Echo Reply",
+                    "133": "Router Solicitation",
+                    "134": "Router Advertisement",
+                    "135": "Neighbor Solicitation",
+                    "136": "Neighbor Advertisement",
+                    "137": "Redirect"
+                }
+                type_desc = icmpv6_types.get(icmp_type, "")
+                if type_desc:
+                    self.packet_details_text.insert(tk.END, f"  Type: {icmp_type} ({type_desc})\n")
+                else:
+                    self.packet_details_text.insert(tk.END, f"  Type: {icmp_type}\n")
+                
+            if hasattr(packet.icmpv6, 'code'):
+                self.packet_details_text.insert(tk.END, f"  Code: {packet.icmpv6.code}\n")
+            if hasattr(packet.icmpv6, 'checksum'):
+                self.packet_details_text.insert(tk.END, f"  Checksum: {packet.icmpv6.checksum}\n")
+            
+            # Additional ICMPv6-specific fields
+            if hasattr(packet.icmpv6, 'nd_target'):
+                self.packet_details_text.insert(tk.END, f"  Target Address: {packet.icmpv6.nd_target}\n")
+            if hasattr(packet.icmpv6, 'opt_linkaddr'):
+                self.packet_details_text.insert(tk.END, f"  Link-Layer Address: {packet.icmpv6.opt_linkaddr}\n")
+            if hasattr(packet.icmpv6, 'data'):
+                self.packet_details_text.insert(tk.END, f"  Data: {packet.icmpv6.data}\n")
+        
+        # Handle ICMPv4
+        elif hasattr(packet, 'icmp'):
+            self.packet_details_text.insert(tk.END, f"ICMP Details:\n")
+            if hasattr(packet.icmp, 'type'):
+                icmp_type = packet.icmp.type
+                # Add ICMP type descriptions
+                icmp_types = {
+                    "0": "Echo Reply",
+                    "3": "Destination Unreachable",
+                    "5": "Redirect",
+                    "8": "Echo Request",
+                    "11": "Time Exceeded"
+                }
+                type_desc = icmp_types.get(icmp_type, "")
+                if type_desc:
+                    self.packet_details_text.insert(tk.END, f"  Type: {icmp_type} ({type_desc})\n")
+                else:
+                    self.packet_details_text.insert(tk.END, f"  Type: {icmp_type}\n")
+            
+            if hasattr(packet.icmp, 'code'):
+                self.packet_details_text.insert(tk.END, f"  Code: {packet.icmp.code}\n")
+            if hasattr(packet.icmp, 'checksum'):
+                self.packet_details_text.insert(tk.END, f"  Checksum: {packet.icmp.checksum}\n")
+            if hasattr(packet.icmp, 'data'):
+                self.packet_details_text.insert(tk.END, f"  Data: {packet.icmp.data}\n")
+          # Handle packet data display
+        if hasattr(packet, 'data'):
+            self.packet_details_text.insert(tk.END, f"\nPacket Data Summary:\n")
+            self.packet_details_text.insert(tk.END, f"  Packet ID: {packet_id}\n")
+            self.packet_details_text.insert(tk.END, f"  Time: {timestamp}\n")
+            self.packet_details_text.insert(tk.END, f"  Length: {length} bytes\n")
+            self.packet_details_text.insert(tk.END, f"  Info: {info}\n")
+            self.packet_details_text.insert(tk.END, f"  Alert: {self.check_alerts(packet_id)}\n\n")
+            
+            try:
+                # Display hexadecimal representation of raw data if available
+                self.packet_details_text.insert(tk.END, f"Raw Data Hexadecimal:\n")
+                if hasattr(packet, 'raw_packet') and packet.raw_packet:
+                    # Try to format the raw data as hexadecimal bytes
+                    raw_data = packet.raw_packet
+                    if isinstance(raw_data, bytes):
+                        # Create a formatted hex dump with 16 bytes per line
+                        MAX_DISPLAY_BYTES = 128  # Limit display to avoid overwhelming the UI
+                        
+                        for i in range(0, min(len(raw_data), MAX_DISPLAY_BYTES), 16):
+                            # Get chunk of up to 16 bytes
+                            chunk = raw_data[i:i+16]
+                            
+                            # Format as hex
+                            hex_line = ' '.join(f'{b:02x}' for b in chunk)
+                            
+                            # Add ASCII representation where possible
+                            ascii_repr = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
+                            
+                            # Add the formatted line with offset
+                            self.packet_details_text.insert(tk.END, f"  {i:04x}: {hex_line.ljust(48)} | {ascii_repr}\n")
+                        
+                        if len(raw_data) > MAX_DISPLAY_BYTES:
+                            self.packet_details_text.insert(tk.END, f"  ... {len(raw_data) - MAX_DISPLAY_BYTES} more bytes not shown ...\n")
+                    else:
+                        # Try to convert to string if it's not bytes
+                        self.packet_details_text.insert(tk.END, f"  {str(raw_data)}\n")
+                else:
+                    # Try to access binary data through various alternative attributes
+                    found_data = False
+                    for attr_name in ['binary', 'binary_data', 'data', 'payload', 'raw']:
+                        if hasattr(packet, attr_name):
+                            data_value = getattr(packet, attr_name)
+                            if data_value:
+                                self.packet_details_text.insert(tk.END, f"  Data available in '{attr_name}' field\n")
+                                found_data = True
+                                break
+                    
+                    if not found_data:
+                        self.packet_details_text.insert(tk.END, "  Raw data structure available but format cannot be displayed\n")
+            except Exception as e:
+                self.packet_details_text.insert(tk.END, f"  [Error displaying packet data: {str(e)}]\n")
+        
+        if hasattr(packet, 'arp'):
+            self.packet_details_text.insert(tk.END, f"ARP Details:\n")
+            if hasattr(packet.arp, 'op'):
+                self.packet_details_text.insert(tk.END, f"  Operation: {packet.arp.op}\n")
+            if hasattr(packet.arp, 'psrc'):
+                self.packet_details_text.insert(tk.END, f"  Source IP: {packet.arp.psrc}\n")
+            if hasattr(packet.arp, 'pdst'):
+                self.packet_details_text.insert(tk.END, f"  Destination IP: {packet.arp.pdst}\n")
+            if hasattr(packet.arp, 'hwsrc'):
+                self.packet_details_text.insert(tk.END, f"  Source MAC: {packet.arp.hwsrc}\n")
+            if hasattr(packet.arp, 'hwdst'):
+                self.packet_details_text.insert(tk.END, f"  Destination MAC: {packet.arp.hwdst}\n")
+            if hasattr(packet, 'tls'):
+                self.packet_details_text.insert(tk.END, f"TLS Details:\n")
+            
+                # Get all available attributes for TLS
+                tls_attributes = dir(packet.tls)
+                displayed_something = False
+
+                # Check common TLS attributes
+                if hasattr(packet.tls, 'handshake_type'):
+                    self.packet_details_text.insert(tk.END, f"  Handshake Type: {packet.tls.handshake_type}\n")
+                    displayed_something = True
+                if hasattr(packet.tls, 'record_version'):
+                    self.packet_details_text.insert(tk.END, f"  Record Version: {packet.tls.record_version}\n")
+                    displayed_something = True
+                if hasattr(packet.tls, 'record_length'):
+                    self.packet_details_text.insert(tk.END, f"  Record Length: {packet.tls.record_length}\n")
+                    displayed_something = True
+                
+                # Handle the 'record' attribute which often contains TLS record data
+                if hasattr(packet.tls, 'record'):
+                    try:
+                        # Extract content type for each record
+                        self.packet_details_text.insert(tk.END, f"  Content Type: ")
+                        if hasattr(packet.tls, 'record_content_type'):
+                            self.packet_details_text.insert(tk.END, f"{packet.tls.record_content_type}\n")
+                            displayed_something = True
+                        elif hasattr(packet.tls, 'contenttype'):
+                            self.packet_details_text.insert(tk.END, f"{packet.tls.contenttype}\n")
+                            displayed_something = True
+                        else:
+                            # Try to decode common content types
+                            content_types = {
+                                20: "Change Cipher Spec",
+                                21: "Alert",
+                                22: "Handshake",
+                                23: "Application Data"
+                            }
+                            if hasattr(packet.tls, 'type'):
+                                type_num = int(packet.tls.type)
+                                type_name = content_types.get(type_num, f"Unknown ({type_num})")
+                                self.packet_details_text.insert(tk.END, f"{type_name}\n")
+                                displayed_something = True
+                            else:
+                                self.packet_details_text.insert(tk.END, "Unknown\n")
+                    except Exception as e:
+                        self.packet_details_text.insert(tk.END, f"Error parsing record: {str(e)}\n")
+                        displayed_something = True
+
+                # Look for additional TLS fields that might exist
+                for attr in ['record_content_type', 'handshake_version', 'cipher_suite', 
+                             'extension_type', 'server_name', 'handshake_certificate',
+                             'handshake_session_id', 'handshake_random_time']:
+                    if attr in tls_attributes:
+                        try:
+                            value = getattr(packet.tls, attr)
+                            if value:
+                                self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
+                                displayed_something = True
+                        except Exception:
+                            pass  # Skip if attribute access causes error
+            
+                # Get any field that starts with 'tls.' to catch TLS-related fields
+                try:
+                    for field in packet.tls._all_fields:
+                        if field.startswith('tls.') and not any(field.endswith(x) for x in ['type', 'version', 'length']):
+                            try:
+                                field_name = field.split('.')[-1]
+                                value = packet.tls.get_field(field)
+                                if value:
+                                    self.packet_details_text.insert(tk.END, f"  {field_name.replace('_', ' ').title()}: {value}\n")
+                                    displayed_something = True
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                    
+                # If no attributes were displayed, show a message
+                if not displayed_something:
+                    self.packet_details_text.insert(tk.END, f"  [TLS packet detected but no detailed fields available]\n")
+            
+        if hasattr(packet, 'mdns'):
+                self.packet_details_text.insert(tk.END, f"mDNS Details:\n")
+                
+                # Get all available attributes for mDNS
+                mdns_attributes = dir(packet.mdns)
+                displayed_something = False
+                
+                # Check common mDNS attributes
+                if hasattr(packet.mdns, 'transaction_id'):
+                    self.packet_details_text.insert(tk.END, f"  Transaction ID: {packet.mdns.transaction_id}\n")
+                    displayed_something = True
+                if hasattr(packet.mdns, 'flags'):
+                    self.packet_details_text.insert(tk.END, f"  Flags: {packet.mdns.flags}\n")
+                    displayed_something = True
+                if hasattr(packet.mdns, 'questions'):
+                    self.packet_details_text.insert(tk.END, f"  Questions: {packet.mdns.questions}\n")
+                    displayed_something = True
+                if hasattr(packet.mdns, 'answers'):
+                    self.packet_details_text.insert(tk.END, f"  Answers: {packet.mdns.answers}\n")
+                    displayed_something = True
+                
+                # Add any other useful mDNS attributes that might be present
+                for attr in ['qry_name', 'qry_type', 'resp_name', 'count_queries', 'count_answers']:
+                    if attr in mdns_attributes:
+                        try:
+                            value = getattr(packet.mdns, attr)
+                            if value:
+                                self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
+                                displayed_something = True
+                        except Exception:
+                            pass  # Skip if attribute access causes error
+                
+                # Check for service discovery information
+                if hasattr(packet.mdns, 'service'):
+                    self.packet_details_text.insert(tk.END, f"  Service: {packet.mdns.service}\n")
+                    displayed_something = True
+                if hasattr(packet.mdns, 'service_instance'):
+                    self.packet_details_text.insert(tk.END, f"  Service Instance: {packet.mdns.service_instance}\n")
+                    displayed_something = True
+                
+                # If no attributes were displayed, show a message
+                if not displayed_something:
+                    self.packet_details_text.insert(tk.END, f"  [mDNS packet detected but no detailed fields available]\n")
+            
+        if hasattr(packet, 'quic'):
+                self.packet_details_text.insert(tk.END, f"QUIC Details:\n")
+                
+                # Get all available attributes for QUIC
+                quic_attributes = dir(packet.quic)
+                displayed_something = False
+                
+                # Check common QUIC attributes
+                if hasattr(packet.quic, 'version'):
+                    self.packet_details_text.insert(tk.END, f"  Version: {packet.quic.version}\n")
+                    displayed_something = True
+                if hasattr(packet.quic, 'connection_id'):
+                    self.packet_details_text.insert(tk.END, f"  Connection ID: {packet.quic.connection_id}\n")
+                    displayed_something = True
+                
+                # Look for additional QUIC fields that might exist
+                for attr in ['packet_number', 'payload_length', 'flags']:
+                    if attr in quic_attributes:
+                        try:
+                            value = getattr(packet.quic, attr)
+                            if value:
+                                self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
+                                displayed_something = True
+                        except Exception:
+                            pass  # Skip if attribute access causes error
+            
+        if hasattr(packet, 'mdns'):
+                self.packet_details_text.insert(tk.END, f"mDNS Details:\n")
+                
+                # Get all available attributes for mDNS
+                mdns_attributes = dir(packet.mdns)
+                displayed_something = False
+                
+                # Check common mDNS attributes
+                if hasattr(packet.mdns, 'transaction_id'):
+                    self.packet_details_text.insert(tk.END, f"  Transaction ID: {packet.mdns.transaction_id}\n")
+                    displayed_something = True
+                if hasattr(packet.mdns, 'flags'):
+                    self.packet_details_text.insert(tk.END, f"  Flags: {packet.mdns.flags}\n")
+                    displayed_something = True
+                
+                # Look for additional mDNS fields that might exist
+                for attr in ['query_type', 'response_code', 'answers']:
+                    if attr in mdns_attributes:
+                        try:
+                            value = getattr(packet.mdns, attr)
+                            if value:
+                                self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
+                                displayed_something = True
+                        except Exception:
+                            pass  # Skip if attribute access causes error
 
     def add_alert(self, alert_details):
         """Add an alert to the alerts tab"""
@@ -1059,13 +1656,16 @@ class NetworkMonitor:
         try:
             # Format timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Extract flow information safely with defaults
+              # Extract flow information safely with defaults
             src_ip = getattr(flow, 'src_ip', "Unknown")
             dst_ip = getattr(flow, 'dst_ip', "Unknown")
-            protocol = getattr(flow, 'protocol', "Unknown")
-            src_port = getattr(flow, 'src_port', "Unknown")
-            dst_port = getattr(flow, 'dst_port', "Unknown")
+            
+            # Convert protocol number to protocol name
+            protocol_num = getattr(flow, 'protocol', 0)
+            protocol = self.protocol_map.get(protocol_num, str(protocol_num))
+            
+            src_port = getattr(flow, 'src_port', None)
+            dst_port = getattr(flow, 'dst_port', None)
             packets = getattr(flow, 'bidirectional_packets', 0)
             bytes_count = getattr(flow, 'bidirectional_bytes', 0)
             
@@ -1099,8 +1699,387 @@ class NetworkMonitor:
             self.flows_tree.tag_configure("high_risk", background="#ffcccc")
             self.flows_tree.tag_configure("medium_risk", background="#ffffcc")
             
+                       
             # Auto-scroll to show the latest entry
             self.flows_tree.see(item_id)
+
+        except         Exception as e:
+            print(f"Error updating flow UI: {e}")
+
+    def check_alerts(self, packet_id):
+        """Check if the given packet ID has triggered any alerts.
+        
+        Args:
+            packet_id (str): The ID of the packet to check
+            
+        Returns:
+            str: Alert information if found, or a message indicating no alerts
+        """
+        # Parse the packet ID to extract source IP (format: timestamp_src_dst)
+        try:
+            parts = packet_id.split('_')
+            if len(parts) >= 2:
+                src_ip = parts[1]
+                
+                # Check if this IP is in any alert
+                for item_id in self.alerts_tree.get_children():
+                    alert_values = self.alerts_tree.item(item_id, "values")
+                    alert_src = alert_values[2]  # Source IP is in the 3rd column
+                    
+                    if alert_src == src_ip:
+                        return f"⚠️ {alert_values[1]} alert: {alert_values[4]}"
+        except Exception as e:
+            return f"Error checking alerts: {e}"
+            
+        return "No alerts for this packet"
+
+    def _create_flow_key(self, flow):
+        """Create a unique key for tracking a flow"""
+        # Extract the flow 5-tuple (IPs, ports, protocol)
+        src_ip = getattr(flow, 'src_ip', 'unknown')
+        dst_ip = getattr(flow, 'dst_ip', 'unknown')
+        src_port = getattr(flow, 'src_port', 0)
+        dst_port = getattr(flow, 'dst_port', 0)
+        protocol = getattr(flow, 'protocol', 0)
+        
+        # Create a consistent key regardless of direction
+        if src_ip < dst_ip or (src_ip == dst_ip and src_port < dst_port):
+            return f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}"
+        else:
+            return f"{dst_ip}:{dst_port}-{src_ip}:{src_port}-{protocol}"
+
+    def analyze_flow_packets(self, flow_data):
+        """Analyze packets for a specific flow using PyShark
+        
+        This function creates a targeted PyShark capture for packets matching a specific flow
+        identified by NFStream, enabling detailed packet inspection for interesting flows.
+        
+        Args:
+            flow_data (dict): Dictionary containing flow information
+        """
+        try:
+            # Extract flow data
+            flow = flow_data['flow']
+            flow_key = flow_data['flow_key']
+            risk_score = flow_data['risk_score']
+            
+            src_ip = getattr(flow, 'src_ip', None)
+            dst_ip = getattr(flow, 'dst_ip', None)
+            src_port = getattr(flow, 'src_port', None)
+            dst_port = getattr(flow, 'dst_port', None)
+            protocol = getattr(flow, 'protocol', None)
+            
+            if not (src_ip and dst_ip):
+                print(f"Missing IP information for flow analysis: {src_ip} -> {dst_ip}")
+                return
+                
+            # Determine protocol name for filter
+            proto_name = "ip"  # Default
+            if protocol == 6:
+                proto_name = "tcp"
+            elif protocol == 17:
+                proto_name = "udp"
+            elif protocol == 1:
+                proto_name = "icmp"
+            
+            # Build capture filter
+            capture_filter = ""
+            
+            # Create bidirectional filter
+            filter_a_to_b = f"host {src_ip} and host {dst_ip}"
+            
+            if src_port and dst_port:
+                if proto_name in ["tcp", "udp"]:
+                    filter_a_to_b += f" and {proto_name} port {src_port} and {proto_name} port {dst_port}"
+                    
+            capture_filter = filter_a_to_b
+            
+            print(f"PyShark analyzing flow: {src_ip}:{src_port} <-> {dst_ip}:{dst_port} ({proto_name})")
+            print(f"Using filter: {capture_filter}")
+              # Create a temporary tracking key for this flow analysis
+            with self.flow_tracking_lock:
+                self.flow_tracking[flow_key] = {
+                    'flow': flow,
+                    'risk_score': risk_score,
+                    'start_time': datetime.now(),
+                    'packet_count': 0,
+                    'analyzed': False
+                }
+              # Create targeted PyShark capture for this flow
+            interface_name = self.interface['pyshark_name']
+            
+            # Use a thread to handle the PyShark capture for this specific flow
+            capture_thread = threading.Thread(
+                target=self._targeted_packet_capture,
+                args=(interface_name, capture_filter, flow_key)
+            )
+            capture_thread.daemon = True
+            capture_thread.start()
             
         except Exception as e:
-            print(f"Error updating flow UI: {e}")
+            print(f"Error starting flow packet analysis: {e}")    
+
+    def _targeted_packet_capture(self, interface_name, capture_filter, flow_key):
+        """Perform a targeted packet capture for a specific flow
+        
+        Args:
+            interface_name (str): Network interface name
+            capture_filter (str): BPF filter for packets
+            flow_key (str): Flow tracking key
+        """
+        capture = None
+        loop = None
+        capture_id = f"flow-{flow_key}-{time.time()}"
+        
+        try:
+            # Configure timeout based on risk score - analyze higher risk flows longer
+            with self.flow_tracking_lock:
+                if flow_key not in self.flow_tracking:
+                    return
+                    
+                risk_score = self.flow_tracking[flow_key].get('risk_score', 0)
+            
+            # Set uniform capture settings to ensure we get packets
+            # Use longer timeouts and higher packet counts to ensure we capture something
+            capture_timeout = 15  # 15 seconds for all flows
+            max_packets = 1000   # Capture up to 1000 packets per flow
+            
+            print(f"Flow {flow_key} capture settings: timeout={capture_timeout}s, max_packets={max_packets}")
+            
+            print(f"Starting targeted capture with filter: {capture_filter}, timeout: {capture_timeout}s")
+            
+            # Create and set an event loop for this thread - CRITICAL FOR PYSHARK
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Create capture with specific filter for this flow
+            capture = pyshark.LiveCapture(
+                interface=interface_name,
+                bpf_filter=capture_filter,
+                display_filter=None,
+                use_json=True,
+                include_raw=False
+            )
+            
+            # Register this capture for proper cleanup later
+            with self.active_captures_lock:
+                self.active_captures.append({
+                    'id': capture_id,
+                    'capture': capture,
+                    'loop': loop,
+                    'flow_key': flow_key,
+                    'start_time': time.time()
+                })
+            
+            # Check if we should still be monitoring - exit early if monitoring was stopped
+            if not self.is_monitoring:
+                print(f"Monitoring stopped, aborting capture for flow {flow_key}")
+                return
+            
+            # Capture packets using a synchronous approach
+            try:
+                packet_count = 0
+                # Use the loop to execute the sniff operation
+                capture.sniff(timeout=capture_timeout, packet_count=max_packets)
+                
+                # Process captured packets
+                for packet in capture:
+                    try:
+                        # Check if monitoring was stopped during packet processing
+                        if not self.is_monitoring:
+                            print(f"Monitoring stopped during packet processing for flow {flow_key}")
+                            break
+                            
+                        packet_count += 1
+                        # Use a reference to the packet and perform UI updates in main thread
+                        packet_ref = packet  # Create a reference to avoid capture issues
+                        self.root.after(0, lambda p=packet_ref: self.analyze_flow_specific_packet(p, flow_key))
+                    except Exception as packet_err:
+                        print(f"Error processing packet in targeted capture: {packet_err}")
+                
+                print(f"Completed targeted capture for flow {flow_key}: {packet_count} packets captured")
+                
+            except KeyboardInterrupt:
+                print("Capture stopped by user")
+            except Exception as sniff_error:
+                if "Event loop is closed" in str(sniff_error):
+                    print(f"Event loop was closed during capture for flow {flow_key} - this is expected during shutdown")
+                else:
+                    print(f"Error during packet sniffing for flow {flow_key}: {sniff_error}")
+            finally:
+                # Clean up resources safely
+                try:
+                    # Remove this capture from active captures
+                    with self.active_captures_lock:
+                        self.active_captures = [c for c in self.active_captures if c['id'] != capture_id]
+                    
+                    # Close the event loop if it's still open
+                    if loop and not loop.is_closed():
+                        loop.close()
+                except Exception as cleanup_error:
+                    print(f"Error cleaning up capture resources for flow {flow_key}: {cleanup_error}")
+            
+            # Update flow tracking
+            with self.flow_tracking_lock:
+                if flow_key in self.flow_tracking:
+                    self.flow_tracking[flow_key]['analyzed'] = True
+                    self.flow_tracking[flow_key]['packet_count'] = packet_count
+            
+        except Exception as e:
+            print(f"Error in targeted packet capture: {e}")
+            
+            # Ensure cleanup if an error occurs
+            try:
+                # Remove this capture from active captures
+                with self.active_captures_lock:
+                    self.active_captures = [c for c in self.active_captures if c['id'] != capture_id]
+                
+                # Close the event loop if it's still open
+                if loop and not loop.is_closed():
+                    loop.close()
+            except Exception:
+                pass  # Ignore cleanup errors during exception handling
+    
+    def analyze_flow_specific_packet(self, packet, flow_key):
+        """Analyze a packet specifically for a tracked flow
+        
+        Args:
+            packet: PyShark packet object
+            flow_key (str): Flow tracking key for context
+        """
+        try:
+            # Get flow data for context
+            with self.flow_tracking_lock:
+                if flow_key not in self.flow_tracking:
+                    return
+                flow_data = self.flow_tracking[flow_key]
+                risk_score = flow_data.get('risk_score', 0)
+            
+            # Extract packet information
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            
+            # Get source and destination
+            src = "Unknown"
+            dst = "Unknown"
+            protocol = packet.highest_layer
+            length = packet.length
+            info = self.get_packet_summary(packet)
+            
+            # Extract IP addresses if available
+            if hasattr(packet, 'ip'):
+                src = packet.ip.src
+                dst = packet.ip.dst
+            elif hasattr(packet, 'ipv6'):
+                src = packet.ipv6.src
+                dst = packet.ipv6.dst
+            
+            # Add flow context to packet info
+            info = f"[Flow: {flow_key}] {info}"
+            
+            # Store packet for later reference with special key indicating flow context
+            packet_id = f"{timestamp}_{src}_{dst}_flow_{flow_key}"
+            
+            # Add to UI with flow context
+            packet_data = (timestamp, src, dst, protocol, length, info)
+            
+            # Store packet and add to UI
+            self.packet_store[packet_id] = packet
+            item_id = self.packets_tree.insert("", "end", values=packet_data)
+            self.packets_tree.item(item_id, tags=(packet_id,))
+            
+            # Apply special styling for flow-specific packets
+            if risk_score >= 80:
+                self.packets_tree.item(item_id, tags=(packet_id, "high_risk_flow"))
+            elif risk_score >= 40:
+                self.packets_tree.item(item_id, tags=(packet_id, "medium_risk_flow"))
+            else:
+                self.packets_tree.item(item_id, tags=(packet_id, "low_risk_flow"))
+                
+            # Configure tags
+            self.packets_tree.tag_configure("high_risk_flow", background="#ffcccc")
+            self.packets_tree.tag_configure("medium_risk_flow", background="#ffffcc")
+            self.packets_tree.tag_configure("low_risk_flow", background="#e6f2ff")
+            
+            # Check packet payload for malicious content
+            self.check_packet_payload(packet, src, dst)
+            
+            # Auto-scroll to show latest
+            self.packets_tree.see(item_id)
+            
+        except Exception as e:
+            print(f"Error analyzing flow-specific packet: {e}")    
+            
+    def kill_pyshark_processes(self):
+        """Force-kill any PyShark dumpcap processes that might still be running"""
+        try:
+            import os
+            import signal
+            import psutil
+            
+            print("Terminating any running PyShark capture processes...")
+            
+            # First, try to gracefully close any captures that we're tracking
+            with self.active_captures_lock:
+                if self.active_captures:
+                    print(f"Gracefully closing {len(self.active_captures)} tracked PyShark captures...")
+                    for capture_info in self.active_captures:
+                        try:
+                            # Close the capture
+                            capture = capture_info.get('capture')
+                            if capture:
+                                if hasattr(capture, 'close'):
+                                    capture.close()
+                                if hasattr(capture, 'eventloop') and capture.eventloop:
+                                    capture.eventloop = None  # Break reference to event loop
+                                if hasattr(capture, '_packets'):
+                                    capture._packets.clear()  # Clear any stored packets
+                            
+                            # Close the event loop if it exists
+                            loop = capture_info.get('loop')
+                            if loop and not loop.is_closed():
+                                pending_tasks = asyncio.all_tasks(loop) if hasattr(asyncio, 'all_tasks') else []
+                                if pending_tasks:
+                                    # Cancel any pending tasks
+                                    for task in pending_tasks:
+                                        task.cancel()
+                                loop.close()
+                        except Exception as e:
+                            print(f"Error closing capture {capture_info.get('id', 'unknown')}: {e}")
+                    
+                    # Clear the tracked captures
+                    self.active_captures = []
+            
+            # After graceful cleanup, find and forcefully terminate any remaining processes
+            killed = 0
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    proc_name = proc.info['name'].lower() if proc.info['name'] else ""
+                    cmdline = proc.info['cmdline'] if proc.info['cmdline'] else []
+                    cmdline_str = " ".join(cmdline).lower() if cmdline else ""
+                    
+                    # Find dumpcap processes
+                    if proc_name == "dumpcap" or proc_name == "dumpcap.exe":
+                        print(f"Found dumpcap process: PID {proc.pid}")
+                        os.kill(proc.pid, signal.SIGTERM)
+                        killed += 1
+                    # Also look for tshark processes
+                    elif proc_name == "tshark" or proc_name == "tshark.exe":
+                        print(f"Found tshark process: PID {proc.pid}")
+                        os.kill(proc.pid, signal.SIGTERM)
+                        killed += 1
+                    # Look for any Python process that might be running PyShark
+                    elif ("python" in proc_name and 
+                          ("pyshark" in cmdline_str or "dumpcap" in cmdline_str or "tshark" in cmdline_str)):
+                        print(f"Found PyShark related Python process: PID {proc.pid}")
+                        os.kill(proc.pid, signal.SIGTERM)
+                        killed += 1
+                except Exception as kill_error:
+                    print(f"Error terminating process: {kill_error}")
+                    
+            print(f"Terminated {killed} PyShark/dumpcap processes")
+            
+            # Add a small delay to let processes terminate completely
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"Error killing PyShark processes: {e}")
