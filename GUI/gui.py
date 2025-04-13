@@ -620,25 +620,74 @@ class NetworkMonitor:
 
     def stop_monitoring(self):
         """Stop the network monitoring process"""
-        print("Stopping all monitoring activities...")
-        self.is_monitoring = False
-        self.start_button.config(text="Start Monitoring")
-        self.status_label.config(text="Status: Idle")
-        
-        # Clear any pending flow packet analysis requests
-        try:
-            while not self.flow_packet_queue.empty():
-                self.flow_packet_queue.get_nowait()
-        except:
-            pass
+        if self.is_monitoring:
+            self.is_monitoring = False
             
-        # Wait for main thread to finish
-        if self.monitor_thread:
-            print("Waiting for monitoring thread to finish...")
-            self.monitor_thread.join(timeout=1.0)
+            # First properly close any active PyShark captures
+            self.close_active_captures()
             
-        print("Monitoring stopped")
-        self.kill_pyshark_processes()  # Ensure any PyShark processes are terminated
+            if self.monitor_thread:
+                self.monitor_thread.join(timeout=5.0)
+                self.monitor_thread = None
+            
+            # Kill any remaining PyShark processes
+            self.kill_pyshark_processes()
+            
+            # Update UI
+            self.start_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED)
+            self.status_label.config(text="Monitoring stopped")
+            
+            # Reset flow state
+            with self.flow_tracking_lock:
+                self.flow_tracking.clear()
+    
+    def close_active_captures(self):
+        """Gracefully close all active PyShark captures to prevent resource leaks"""
+        with self.active_captures_lock:
+            if not self.active_captures:
+                print("No active captures to close")
+                return
+            
+            print(f"Closing {len(self.active_captures)} active captures...")
+            for capture_info in self.active_captures:
+                try:
+                    capture = capture_info.get('capture')
+                    if capture:
+                        print(f"Closing capture {capture_info.get('id', 'unknown')}")
+                        # Store reference to eventloop
+                        eventloop = getattr(capture, 'eventloop', None)
+                        
+                        # Clear references to avoid memory leaks
+                        if hasattr(capture, '_packets'):
+                            capture._packets.clear()
+                        
+                        # Close capture's subprocess if it exists
+                        if hasattr(capture, 'close'):
+                            try:
+                                # Check if eventloop is still active before closing
+                                if eventloop and not eventloop.is_closed():
+                                    capture.close()
+                                else:
+                                    print("Event loop already closed, skipping capture.close()")
+                            except Exception as e:
+                                print(f"Error closing capture: {e}")
+                        
+                        # Close the event loop explicitly if still open
+                        if eventloop and not eventloop.is_closed():
+                            try:
+                                eventloop.close()
+                            except Exception as e:
+                                print(f"Error closing event loop: {e}")
+                        
+                        # Break circular references
+                        capture.eventloop = None
+                except Exception as e:
+                    print(f"Error during capture cleanup: {e}")
+            
+            # Clear the list of active captures
+            self.active_captures.clear()
+            print("All captures closed")
 
     def monitoring_loop(self):
         """Main monitoring loop running in a separate thread"""
@@ -950,7 +999,7 @@ class NetworkMonitor:
             if hasattr(packet, 'dns'):
                 if hasattr(packet.dns, 'qry_name'):
                     summary = f"DNS Query for {packet.dns.qry_name}"
-                elif hasattr(packet, 'resp_name'):
+                elif hasattr(packet.dns, 'resp_name'):
                     summary = f"DNS Response for {packet.dns.resp_name}"
         
         return summary
@@ -1656,7 +1705,7 @@ class NetworkMonitor:
         try:
             # Format timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-              # Extract flow information safely with defaults
+            # Extract flow information safely with defaults
             src_ip = getattr(flow, 'src_ip', "Unknown")
             dst_ip = getattr(flow, 'dst_ip', "Unknown")
             
@@ -1796,65 +1845,13 @@ class NetworkMonitor:
             
             print(f"PyShark analyzing flow: {src_ip}:{src_port} <-> {dst_ip}:{dst_port} ({proto_name})")
             print(f"Using filter: {capture_filter}")
-              # Create a temporary tracking key for this flow analysis
-            with self.flow_tracking_lock:
-                self.flow_tracking[flow_key] = {
-                    'flow': flow,
-                    'risk_score': risk_score,
-                    'start_time': datetime.now(),
-                    'packet_count': 0,
-                    'analyzed': False
-                }
-              # Create targeted PyShark capture for this flow
-            interface_name = self.interface['pyshark_name']
-            
-            # Use a thread to handle the PyShark capture for this specific flow
-            capture_thread = threading.Thread(
-                target=self._targeted_packet_capture,
-                args=(interface_name, capture_filter, flow_key)
-            )
-            capture_thread.daemon = True
-            capture_thread.start()
-            
-        except Exception as e:
-            print(f"Error starting flow packet analysis: {e}")    
-
-    def _targeted_packet_capture(self, interface_name, capture_filter, flow_key):
-        """Perform a targeted packet capture for a specific flow
-        
-        Args:
-            interface_name (str): Network interface name
-            capture_filter (str): BPF filter for packets
-            flow_key (str): Flow tracking key
-        """
-        capture = None
-        loop = None
-        capture_id = f"flow-{flow_key}-{time.time()}"
-        
-        try:
-            # Configure timeout based on risk score - analyze higher risk flows longer
-            with self.flow_tracking_lock:
-                if flow_key not in self.flow_tracking:
-                    return
-                    
-                risk_score = self.flow_tracking[flow_key].get('risk_score', 0)
-            
-            # Set uniform capture settings to ensure we get packets
-            # Use longer timeouts and higher packet counts to ensure we capture something
-            capture_timeout = 15  # 15 seconds for all flows
-            max_packets = 1000   # Capture up to 1000 packets per flow
-            
-            print(f"Flow {flow_key} capture settings: timeout={capture_timeout}s, max_packets={max_packets}")
-            
-            print(f"Starting targeted capture with filter: {capture_filter}, timeout: {capture_timeout}s")
-            
-            # Create and set an event loop for this thread - CRITICAL FOR PYSHARK
+              # Create and set an event loop for this thread - CRITICAL FOR PYSHARK
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
             # Create capture with specific filter for this flow
             capture = pyshark.LiveCapture(
-                interface=interface_name,
+                interface=self.interface['pyshark_name'],
                 bpf_filter=capture_filter,
                 display_filter=None,
                 use_json=True,
@@ -1864,11 +1861,9 @@ class NetworkMonitor:
             # Register this capture for proper cleanup later
             with self.active_captures_lock:
                 self.active_captures.append({
-                    'id': capture_id,
                     'capture': capture,
                     'loop': loop,
-                    'flow_key': flow_key,
-                    'start_time': time.time()
+                    'flow_key': flow_key
                 })
             
             # Check if we should still be monitoring - exit early if monitoring was stopped
@@ -1880,7 +1875,7 @@ class NetworkMonitor:
             try:
                 packet_count = 0
                 # Use the loop to execute the sniff operation
-                capture.sniff(timeout=capture_timeout, packet_count=max_packets)
+                capture.sniff(timeout=10, packet_count=100)
                 
                 # Process captured packets
                 for packet in capture:
@@ -1911,19 +1906,13 @@ class NetworkMonitor:
                 try:
                     # Remove this capture from active captures
                     with self.active_captures_lock:
-                        self.active_captures = [c for c in self.active_captures if c['id'] != capture_id]
+                        self.active_captures = [c for c in self.active_captures if c['flow_key'] != flow_key]
                     
                     # Close the event loop if it's still open
                     if loop and not loop.is_closed():
                         loop.close()
                 except Exception as cleanup_error:
                     print(f"Error cleaning up capture resources for flow {flow_key}: {cleanup_error}")
-            
-            # Update flow tracking
-            with self.flow_tracking_lock:
-                if flow_key in self.flow_tracking:
-                    self.flow_tracking[flow_key]['analyzed'] = True
-                    self.flow_tracking[flow_key]['packet_count'] = packet_count
             
         except Exception as e:
             print(f"Error in targeted packet capture: {e}")
@@ -1932,7 +1921,7 @@ class NetworkMonitor:
             try:
                 # Remove this capture from active captures
                 with self.active_captures_lock:
-                    self.active_captures = [c for c in self.active_captures if c['id'] != capture_id]
+                    self.active_captures = [c for c in self.active_captures if c['flow_key'] != flow_key]
                 
                 # Close the event loop if it's still open
                 if loop and not loop.is_closed():
