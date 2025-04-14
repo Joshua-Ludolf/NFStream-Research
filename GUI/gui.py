@@ -336,7 +336,6 @@ class NetworkMonitor:
         
         return results
     
-    
     def setup_ui(self):
         """Set up the user interface"""
         # Create notebook for tabs
@@ -370,6 +369,10 @@ class NetworkMonitor:
         # Start/Stop button
         self.start_button = ttk.Button(self.control_frame, text="Start Monitoring", command=self.toggle_monitoring)
         self.start_button.pack(side=tk.LEFT, padx=10)
+        
+        # Stop button (initially disabled)
+        self.stop_button = ttk.Button(self.control_frame, text="Stop Monitoring", command=self.stop_monitoring, state=tk.NORMAL)
+        self.stop_button.pack(side=tk.LEFT, padx=10)
         
         # Status label
         self.status_label = ttk.Label(self.control_frame, text="Status: Idle")
@@ -586,15 +589,13 @@ class NetworkMonitor:
         except Exception:
             return False
         
-
     def toggle_monitoring(self):
         """Start or stop the monitoring process"""
         if self.is_monitoring:
             self.stop_monitoring()
         else:
             self.start_monitoring()
-
-
+    
     def start_monitoring(self):
         """Start the network monitoring process"""
         # Interface is already configured as Wi-Fi
@@ -605,8 +606,15 @@ class NetworkMonitor:
         print(f"  PyShark: {self.interface['pyshark_name']}")
         print(f"  Scapy: {self.interface['scapy_name']}")
         
+        # Initialize packet tracking
+        self.packet_store = {}  # Reset packet store
+        self.active_captures = []  # Reset active captures list
+        self.flow_tracking = {}  # Reset flow tracking
+        self.flow_tracking_lock = threading.Lock()
+        
         self.is_monitoring = True
-        self.start_button.config(text="Stop Monitoring")
+        self.start_button.config(state=tk.DISABLED)  # Disable start button 
+        self.stop_button.config(state=tk.NORMAL)  # Enable stop button
         self.status_label.config(text=f"Status: Monitoring {self.interface['nfstream_name']}")
         
         # Clear existing data
@@ -616,105 +624,167 @@ class NetworkMonitor:
         # Start monitoring in a separate thread
         self.monitor_thread = threading.Thread(target=self.monitoring_loop)
         self.monitor_thread.daemon = True
-        self.monitor_thread.start()
-
+        self.monitor_thread.start()    
+    
     def stop_monitoring(self):
         """Stop the network monitoring process"""
         if self.is_monitoring:
+            # First, set monitoring flag to false to signal threads to stop
             self.is_monitoring = False
             
-            # First properly close any active PyShark captures
-            self.close_active_captures()
-            
-            if self.monitor_thread:
+            if self.monitor_thread and self.monitor_thread.is_alive():
+                print("Waiting for monitoring thread to stop...")
                 self.monitor_thread.join(timeout=5.0)
-                self.monitor_thread = None
-            
-            # Kill any remaining PyShark processes
+                if self.monitor_thread.is_alive():
+                    print("Warning: Monitoring thread did not stop in time.")
+                else:
+                    print("Monitoring thread stopped successfully.")
+
+            # Ensure all PyShark captures are closed properly
+            self.close_active_captures()
+
+            # Ensure all PyShark processes are terminated
             self.kill_pyshark_processes()
-            
-            # Update UI
+
+            # Reset UI state
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
-            self.status_label.config(text="Monitoring stopped")
-            
-            # Reset flow state
+            self.status_label.config(text="Monitoring stopped")            # Clear flow tracking
             with self.flow_tracking_lock:
                 self.flow_tracking.clear()
-    
+                
+            # Clear packet store to free memory
+            self.packet_store.clear()
+            
+            # Reset any queues that might be blocked
+            if hasattr(self, 'flow_packet_queue'):
+                with contextlib.suppress(Exception):
+                    while not self.flow_packet_queue.empty():
+                        self.flow_packet_queue.get_nowait()
+                        
+            if hasattr(self, 'packet_queue'):
+                with contextlib.suppress(Exception):
+                    while not self.packet_queue.empty():
+                        self.packet_queue.get_nowait()
+            
+            # Reset monitor thread
+            self.monitor_thread = None
+            print("Monitoring resources reset successfully")
+
     def close_active_captures(self):
-        """Gracefully close all active PyShark captures to prevent resource leaks"""
+        """Enhanced method to gracefully close all active PyShark captures and their event loops."""
         with self.active_captures_lock:
             if not self.active_captures:
                 print("No active captures to close")
                 return
-            
+
             print(f"Closing {len(self.active_captures)} active captures...")
             for capture_info in self.active_captures:
                 try:
                     capture = capture_info.get('capture')
+                    eventloop = capture_info.get('loop')
+
                     if capture:
                         print(f"Closing capture {capture_info.get('id', 'unknown')}")
-                        # Store reference to eventloop
-                        eventloop = getattr(capture, 'eventloop', None)
-                        
-                        # Clear references to avoid memory leaks
+                        # Clear any stored packets to free memory
                         if hasattr(capture, '_packets'):
                             capture._packets.clear()
                         
-                        # Close capture's subprocess if it exists
-                        if hasattr(capture, 'close'):
+                        # Instead of using the .close() method which tries to use the event loop internally,
+                        # we'll manually clean up critical resources
+                        try:
+                            # Directly access and close the subprocess if it exists
+                            if hasattr(capture, "_proc"):
+                                if hasattr(capture._proc, "kill"):
+                                    capture._proc.kill()
+                                elif hasattr(capture._proc, "terminate"):
+                                    capture._proc.terminate()
+                        except Exception as e:
+                            print(f"Error terminating capture process: {e}")
+
+                    # Handle the event loop separately after dealing with the capture
+                    if eventloop and not eventloop.is_closed():
+                        try:
+                            # Try to properly cancel any pending tasks
                             try:
-                                # Check if eventloop is still active before closing
-                                if eventloop and not eventloop.is_closed():
-                                    capture.close()
-                                else:
-                                    print("Event loop already closed, skipping capture.close()")
-                            except Exception as e:
-                                print(f"Error closing capture: {e}")
-                        
-                        # Close the event loop explicitly if still open
-                        if eventloop and not eventloop.is_closed():
-                            try:
+                                pending_tasks = asyncio.all_tasks(eventloop) if hasattr(asyncio, 'all_tasks') else []
+                                for task in pending_tasks:
+                                    task.cancel()
+                            except Exception:
+                                pass  # Ignore task cancellation errors
+                                
+                            # Make sure to close the loop even if task cancellation failed
+                            if not eventloop.is_closed():
                                 eventloop.close()
-                            except Exception as e:
-                                print(f"Error closing event loop: {e}")
-                        
-                        # Break circular references
-                        capture.eventloop = None
+                                
+                        except Exception as e:
+                            print(f"Error closing event loop: {e}")
+
                 except Exception as e:
                     print(f"Error during capture cleanup: {e}")
-            
-            # Clear the list of active captures
+
             self.active_captures.clear()
             print("All captures closed")
-
+    
     def monitoring_loop(self):
         """Main monitoring loop running in a separate thread"""
         try:
-            # Start NFStream for flow analysis
-            # PyShark will be triggered by NFStream for specific flows
+            print("Starting main monitoring loop")
+            # Create queues for inter-thread communication
+            self.flow_packet_queue = queue.Queue()
+            self.packet_queue = queue.Queue()
+            
+            # Start NFStream for flow analysis in a separate thread
             nfstream_thread = threading.Thread(target=self.nfstream_monitor)
             nfstream_thread.daemon = True
             nfstream_thread.start()
             
-            # Create queue for flow-to-packet mapping
-            self.flow_packet_queue = queue.Queue()
+            # Start PyShark for packet capture in a separate thread
+            pyshark_thread = threading.Thread(target=self.pyshark_monitor)
+            pyshark_thread.daemon = True
+            pyshark_thread.start()
             
-            # Wait for monitoring to stop
+            print("Started NFStream and PyShark monitoring threads")
+            
+            # Main loop - process queued items and keep thread alive
             while self.is_monitoring:
-                time.sleep(0.5)
-                
                 # Process any queued flow packet analysis requests
                 try:
-                    while not self.flow_packet_queue.empty():
+                    # Process up to 5 items per loop iteration to avoid blocking
+                    for _ in range(5):
+                        if self.flow_packet_queue.empty():
+                            break
                         flow_data = self.flow_packet_queue.get_nowait()
                         if flow_data:
+                            # Process the flow data by analyzing corresponding packets
                             self.analyze_flow_packets(flow_data)
                 except queue.Empty:
                     pass
+                except Exception as queue_e:
+                    print(f"Error processing flow queue: {queue_e}")
+                
+                # Process any queued packets from PyShark
+                try:
+                    # Process up to 10 packets per iteration
+                    for _ in range(10):
+                        if self.packet_queue.empty():
+                            break
+                        packet_data = self.packet_queue.get_nowait()
+                        if packet_data:
+                            # Process the packet on the UI thread
+                            self.root.after(0, lambda p=packet_data: self.process_packet(*p))
+                except queue.Empty:
+                    pass
+                except Exception as pkt_e:
+                    print(f"Error processing packet queue: {pkt_e}")
+                
+                # Sleep a short time to prevent high CPU usage
+                time.sleep(0.1)
+                
+            print("Monitoring loop ended")
+            
         except Exception as e:
-            print(f"Error in monitoring loop: {e}")
+            print(f"Critical error in monitoring loop: {e}")
             self.root.after(0, lambda: messagebox.showerror("Error", f"Monitoring error: {str(e)}"))
             self.root.after(0, self.stop_monitoring)
 
@@ -777,7 +847,6 @@ class NetworkMonitor:
             error_msg = str(e)
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"NFStream error: {msg}"))      
               
-    
     def pyshark_monitor(self):
         """Pyshark monitoring process for detailed packet analysis"""
         try:
@@ -785,38 +854,100 @@ class NetworkMonitor:
             interface_name = self.interface['pyshark_name']
             print(f"Starting PyShark monitoring on interface: {interface_name}")
             
-            # Use non-async direct capture approach to avoid event loop conflicts
+            # Each thread needs its own event loop
             try:
-                # Configure PyShark with a proper event loop
-                print(f"Initializing PyShark capture on interface: {interface_name}")
+                # Set a clean new event loop for this thread
+                if hasattr(asyncio, 'get_event_loop') and hasattr(asyncio, 'set_event_loop'):
+                    try:
+                        old_loop = asyncio.get_event_loop()
+                        if old_loop.is_running() or old_loop.is_closed():
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                    except Exception:
+                        # If we can't get the current loop, create a new one
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                else:
+                    # Python 3.10+ style
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                 
-                # Create a new event loop for this thread
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                print(f"Successfully created event loop for PyShark")
+                  # Create a capture instance with a specific BPF filter to avoid certain noisy protocols
+                bpf_filter = "not broadcast and not multicast and not arp"
                 
-                # Use simple LiveCapture with the new event loop
+                # Always use live capture mode for production
+                print(f"Starting live capture on interface: {interface_name}")
                 capture = pyshark.LiveCapture(
                     interface=interface_name,
+                    bpf_filter=bpf_filter,
+                    display_filter="ip",  # Only show IP packets
                     use_json=True,
-                    include_raw=False,
-                    output_file=None,  # Don't save to file
-                    debug=False  # Disable debug to reduce console spam
+                    include_raw=True
                 )
+                    
+                # Register this capture for cleanup
+                with self.active_captures_lock:
+                        self.active_captures.append({
+                            'id': 'main_capture',
+                            'capture': capture,
+                            'loop': loop
+                        })
+                    
+                # Keep sniffing packets in small batches
+                packets_processed = 0
+                while self.is_monitoring:
+                        try:
+                            # Sniff a small batch with timeout
+                            capture.sniff(packet_count=10, timeout=2)
+                            batch_packets = list(capture._packets) if hasattr(capture, '_packets') else []
+                              # Process captured packets
+                            for packet in batch_packets:
+                                if not self.is_monitoring:
+                                    break
+                                
+                                # Process packet directly since queue_packet_for_processing doesn't exist
+                                self.analyze_packet(packet)
+                                packets_processed += 1
+                                
+                                # Provide feedback on packet processing
+                                if packets_processed % 20 == 0:
+                                    print(f"Processed {packets_processed} packets")
+                            
+                            # Clear packets to avoid memory issues
+                            if hasattr(capture, '_packets'):
+                                capture._packets.clear()
+                                
+                            # Short delay to prevent CPU thrashing
+                            time.sleep(0.1)
+                            
+                        except KeyboardInterrupt:
+                            print("PyShark capture interrupted")
+                            break
+                        except Exception as batch_err:
+                            print(f"Error in packet batch processing: {batch_err}")
+                            time.sleep(1)  # Back off on errors
+                            if not self.is_monitoring:
+                                break
                 
-                # Process packets using the event loop
-                self._capture_packets_with_loop(capture, loop)
-                
+                print("PyShark monitoring completed")
+            
             except Exception as inner_e:
                 print(f"PyShark capture failed: {inner_e}")
-                # If the first attempt failed, it's better to disable this component than 
-                # to keep trying and creating more processes
-                print("Disabling PyShark monitoring due to initialization error")
+                error_msg = str(inner_e)
+                if "Event loop is closed" in error_msg:
+                    print("Event loop was closed - this is expected during shutdown")
+                elif "Permission denied" in error_msg:
+                    error_msg = "Permission denied capturing packets. Try running the application as administrator."
+                    self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
+                else:
+                    print("Disabling PyShark monitoring due to initialization error")
+                    self.root.after(0, lambda msg=error_msg: messagebox.showwarning("Warning", f"Packet analysis disabled: {msg}"))
                 
         except Exception as e:
             print(f"Error in PyShark monitoring: {e}")
-            error_msg = str(e)
             if self.is_monitoring:  # Only show error if still monitoring
-                self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"PyShark error: {msg}"))
+                self.root.after(0, lambda msg=str(e): messagebox.showerror("Error", f"PyShark error: {msg}"))
 
 
     def _capture_packets_with_loop(self, capture, loop):
@@ -948,8 +1079,8 @@ class NetworkMonitor:
             # Check packet payload for malicious content
             self.check_packet_payload(packet, src, dst)            
         except Exception as e:
-            print(f"Error analyzing packet: {e}")
-
+            print(f"Error analyzing packet: {e}")    
+            
     def add_packet_to_ui(self, packet, packet_data, packet_id):
         """Add packet to the UI"""
         if not self.is_monitoring:
@@ -961,8 +1092,17 @@ class NetworkMonitor:
         # Store packet reference
         self.packets_tree.item(item_id, tags=(packet_id,))
         
-        # Store packet object for later reference
+        # Store packet object for later reference (with debug output)
         self.packet_store[packet_id] = packet
+        print(f"Added packet to store with ID: {packet_id}")
+        
+        # Periodically clean old packets to prevent memory issues
+        if len(self.packet_store) > 1000:
+            # Keep only the 500 most recent packets
+            keys_to_remove = list(self.packet_store.keys())[:-500]
+            for key in keys_to_remove:
+                del self.packet_store[key]
+            print(f"Cleaned packet store, now contains {len(self.packet_store)} packets")
         
         # Auto-scroll to show latest
         self.packets_tree.see(item_id)
@@ -995,15 +1135,14 @@ class NetworkMonitor:
         
         elif hasattr(packet, 'udp'):
             summary = f"UDP {packet.udp.srcport} → {packet.udp.dstport}"
-            
-            if hasattr(packet, 'dns'):
+        
+        if hasattr(packet, 'dns'):
                 if hasattr(packet.dns, 'qry_name'):
                     summary = f"DNS Query for {packet.dns.qry_name}"
                 elif hasattr(packet.dns, 'resp_name'):
                     summary = f"DNS Response for {packet.dns.resp_name}"
         
         return summary
-    
     
     def check_packet_payload(self, packet, src_ip, dst_ip):
         """Check packet payload for malicious content"""
@@ -1046,9 +1185,8 @@ class NetworkMonitor:
                         }
                         self.root.after(0, lambda a=alert_details: self.add_alert(a))
         except Exception as e:
-            print(f"Error checking packet payload: {e}")
-
-
+            print(f"Error checking packet payload: {e}")    
+            
     def show_packet_details(self, event):
         """Show detailed information about the selected packet"""
         selected_items = self.packets_tree.selection()
@@ -1056,12 +1194,20 @@ class NetworkMonitor:
             return
         
         item_id = selected_items[0]
-        packet_id = self.packets_tree.item(item_id, "tags")[0]
+        item_tags = self.packets_tree.item(item_id, "tags")
+        
+        # Ensure we have tags before accessing them
+        if not item_tags:
+            self.packet_details_text.delete(1.0, tk.END)
+            self.packet_details_text.insert(tk.END, "No packet ID associated with this entry.\n")
+            return
+            
+        packet_id = item_tags[0]
         
         # Clear previous details
         self.packet_details_text.delete(1.0, tk.END)
         
-        # Get packet data
+        # Get packet data from the treeview (this is always available)
         values = self.packets_tree.item(item_id, "values")
         timestamp, src, dst, protocol, length, info = values
 
@@ -1069,7 +1215,17 @@ class NetworkMonitor:
         packet = self.packet_store.get(packet_id)
         
         if packet is None:
+            # Display basic information from the UI values even if packet isn't in store
+            self.packet_details_text.insert(tk.END, "=== Basic Packet Information ===\n")
+            self.packet_details_text.insert(tk.END, f"Packet ID: {packet_id}\n")
+            self.packet_details_text.insert(tk.END, f"Time: {timestamp}\n")
+            self.packet_details_text.insert(tk.END, f"Source: {src}\n")
+            self.packet_details_text.insert(tk.END, f"Destination: {dst}\n")
+            self.packet_details_text.insert(tk.END, f"Protocol: {protocol}\n")
+            self.packet_details_text.insert(tk.END, f"Length: {length} bytes\n")
+            self.packet_details_text.insert(tk.END, f"Info: {info}\n\n")
             self.packet_details_text.insert(tk.END, "Detailed packet information not available.\n")
+            self.packet_details_text.insert(tk.END, f"Packet may have been cleaned from memory to conserve resources.\n")
             return
             
         # Show detailed protocol information
@@ -1185,7 +1341,7 @@ class NetworkMonitor:
             if hasattr(packet.dns, 'resp_type'):
                 self.packet_details_text.insert(tk.END, f"  Response Type: {packet.dns.resp_type}\n")
                 displayed_something = True
-                
+            
             # Add any other useful DNS attributes that might be present
             for attr in ['flags', 'id', 'count_queries', 'count_answers', 'dns_time']:
                 if attr in dns_attributes:
@@ -1399,7 +1555,7 @@ class NetworkMonitor:
                                 pass
                 except Exception:
                     pass
-                    
+            
                 # If no attributes were displayed, show a message
                 if not displayed_something:
                     self.packet_details_text.insert(tk.END, f"  [TLS packet detected but no detailed fields available]\n")
@@ -1551,7 +1707,7 @@ class NetworkMonitor:
             
             # In a real implementation, we would use Scapy to craft and send RST packets
             # Example (not actually executed here for safety):
-            # pkt = IP(dst=ip)/TCP(flags="R", dport=range(1, 1024))
+            # pkt =IP(dst=ip)/TCP(flags="R", dport=range(1, 1024))
             # send(pkt, verbose=0)
         except Exception as e:
             print(f"Error blocking IP: {e}")
@@ -1690,11 +1846,13 @@ class NetworkMonitor:
                     "details": f"High packet rate: {flow.bidirectional_packets} packets"
                 }))
                 
+        
         except Exception as e:
             print(f"Error analyzing flow: {e}")
         
         # Cap risk score at 100
         return min(100, risk_score)
+    
     
     
     def update_flow_ui(self, flow, risk_score):
@@ -1749,10 +1907,11 @@ class NetworkMonitor:
             self.flows_tree.tag_configure("medium_risk", background="#ffffcc")
             
                        
+
             # Auto-scroll to show the latest entry
             self.flows_tree.see(item_id)
 
-        except         Exception as e:
+        except Exception as e:
             print(f"Error updating flow UI: {e}")
 
     def check_alerts(self, packet_id):
@@ -1844,8 +2003,7 @@ class NetworkMonitor:
             capture_filter = filter_a_to_b
             
             print(f"PyShark analyzing flow: {src_ip}:{src_port} <-> {dst_ip}:{dst_port} ({proto_name})")
-            print(f"Using filter: {capture_filter}")
-              # Create and set an event loop for this thread - CRITICAL FOR PYSHARK
+            print(f"Using filter: {capture_filter}")            # Create and set an event loop for this thread - CRITICAL FOR PYSHARK
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
@@ -1855,7 +2013,9 @@ class NetworkMonitor:
                 bpf_filter=capture_filter,
                 display_filter=None,
                 use_json=True,
-                include_raw=False
+                include_raw=False,
+                use_ek=True,  # Use tshark's ek output format which is more stable
+                debug=False   # Disable debug to reduce noise
             )
             
             # Register this capture for proper cleanup later
@@ -1870,16 +2030,26 @@ class NetworkMonitor:
             if not self.is_monitoring:
                 print(f"Monitoring stopped, aborting capture for flow {flow_key}")
                 return
-            
-            # Capture packets using a synchronous approach
+              # Capture packets using a synchronous approach with better error handling
             try:
                 packet_count = 0
-                # Use the loop to execute the sniff operation
-                capture.sniff(timeout=10, packet_count=100)
-                
-                # Process captured packets
-                for packet in capture:
-                    try:
+                # Use a small timeout and reduced packet count to be more responsive to shutdown signals
+                capture.sniff(timeout=3, packet_count=20)
+                      # Process captured packets - checking monitoring state before each operation
+                try:
+                    if not self.is_monitoring:
+                        print(f"Monitoring stopped before packet processing for flow {flow_key}")
+                        return
+                    
+                    # Create a local copy of packets to process to avoid any potential async issues
+                    packets = []
+                    if hasattr(capture, '_packets'):
+                        packets = list(capture._packets)
+                        # Clear original packets right away to reduce memory usage and avoid concurrent access
+                        capture._packets.clear()
+                    
+                    # Process each packet in our local copy
+                    for packet in packets:
                         # Check if monitoring was stopped during packet processing
                         if not self.is_monitoring:
                             print(f"Monitoring stopped during packet processing for flow {flow_key}")
@@ -1887,10 +2057,13 @@ class NetworkMonitor:
                             
                         packet_count += 1
                         # Use a reference to the packet and perform UI updates in main thread
+                        # Make a shallow copy of the reference to further isolate from the original capture
                         packet_ref = packet  # Create a reference to avoid capture issues
                         self.root.after(0, lambda p=packet_ref: self.analyze_flow_specific_packet(p, flow_key))
-                    except Exception as packet_err:
-                        print(f"Error processing packet in targeted capture: {packet_err}")
+                        
+                    print(f"Processed {packet_count} packets for flow {flow_key}")
+                except Exception as packet_err:
+                    print(f"Error processing packet in targeted capture: {packet_err}")
                 
                 print(f"Completed targeted capture for flow {flow_key}: {packet_count} packets captured")
                 
@@ -2001,9 +2174,7 @@ class NetworkMonitor:
     def kill_pyshark_processes(self):
         """Force-kill any PyShark dumpcap processes that might still be running"""
         try:
-            import os
-            import signal
-            import psutil
+
             
             print("Terminating any running PyShark capture processes...")
             
@@ -2023,6 +2194,7 @@ class NetworkMonitor:
                                 if hasattr(capture, '_packets'):
                                     capture._packets.clear()  # Clear any stored packets
                             
+
                             # Close the event loop if it exists
                             loop = capture_info.get('loop')
                             if loop and not loop.is_closed():
@@ -2031,10 +2203,11 @@ class NetworkMonitor:
                                     # Cancel any pending tasks
                                     for task in pending_tasks:
                                         task.cancel()
+                                loop.run_until_complete(asyncio.gather(*pending_tasks, return_exceptions=True))
                                 loop.close()
                         except Exception as e:
                             print(f"Error closing capture {capture_info.get('id', 'unknown')}: {e}")
-                    
+
                     # Clear the tracked captures
                     self.active_captures = []
             

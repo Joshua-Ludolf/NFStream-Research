@@ -23,6 +23,7 @@ from scapy.layers.http import HTTP, HTTPRequest
 from scapy.layers.inet import IP, TCP, UDP
 from scapy.layers.dns import DNS, DNSQR
 
+
 # Known malicious IPs from Network Monitor's built-in threats
 # These match the IPs defined in _load_builtin_threats() method
 MALICIOUS_IPS = [
