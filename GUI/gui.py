@@ -358,11 +358,10 @@ class NetworkMonitor:
         
         # Create a fixed Wi-Fi interface with hardcoded values
         self.interface = {
-            'nfstream_name': "Intel(R) Wi-Fi 6 AX201 160MHz",
-            'pyshark_name': "Wi-Fi",
-            'scapy_name': "Intel(R) Wi-Fi 6 AX201 160MHz"
+            'nfstream_name': "Realtek RTL8852BE WiFi 6 802.11ax PCIe Adapter", # Replace with actual interface Description
+            'pyshark_name': "Wi-Fi", # Replace with wifi (windows) or eth0 (linux) or wlan0 (mac)
+            'scapy_name': "Realtek RTL8852BE WiFi 6 802.11ax PCIe Adapter" # Replace with actual interface Description
         }
-        
         # Show which interface we're using
         ttk.Label(self.control_frame, text="Using Wi-Fi Interface").pack(side=tk.LEFT, padx=5)
         
@@ -644,12 +643,12 @@ class NetworkMonitor:
             self.close_active_captures()
 
             # Ensure all PyShark processes are terminated
-            self.kill_pyshark_processes()
-
-            # Reset UI state
+            self.kill_pyshark_processes()            # Reset UI state
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
-            self.status_label.config(text="Monitoring stopped")            # Clear flow tracking
+            self.status_label.config(text="Monitoring stopped")
+            
+            # Clear flow tracking
             with self.flow_tracking_lock:
                 self.flow_tracking.clear()
                 
@@ -669,8 +668,8 @@ class NetworkMonitor:
             
             # Reset monitor thread
             self.monitor_thread = None
-            print("Monitoring resources reset successfully")
-
+            print("Monitoring resources reset successfully")    
+    
     def close_active_captures(self):
         """Enhanced method to gracefully close all active PyShark captures and their event loops."""
         with self.active_captures_lock:
@@ -799,7 +798,6 @@ class NetworkMonitor:
                                 idle_timeout=30,
                                 accounting_mode=0,  # 0 = online mode
                                 bpf_filter=None)    # No BPF filter to capture all traffic
-            
             # Create flow tracking dictionary to correlate flows with packets
             self.flow_tracking = {}
             self.flow_tracking_lock = threading.Lock()
@@ -847,6 +845,7 @@ class NetworkMonitor:
             error_msg = str(e)
             self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"NFStream error: {msg}"))      
               
+
     def pyshark_monitor(self):
         """Pyshark monitoring process for detailed packet analysis"""
         try:
@@ -910,14 +909,17 @@ class NetworkMonitor:
                                 self.analyze_packet(packet)
                                 packets_processed += 1
                                 
+
                                 # Provide feedback on packet processing
                                 if packets_processed % 20 == 0:
                                     print(f"Processed {packets_processed} packets")
                             
+
                             # Clear packets to avoid memory issues
                             if hasattr(capture, '_packets'):
                                 capture._packets.clear()
                                 
+
                             # Short delay to prevent CPU thrashing
                             time.sleep(0.1)
                             
@@ -1047,7 +1049,7 @@ class NetworkMonitor:
             if self.is_monitoring:
                 error_msg = str(e)
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Packet capture error: {msg}"))
-                
+                  
     def analyze_packet(self, packet):
         """Analyze a packet for security issues and update UI"""
         try:
@@ -1069,6 +1071,21 @@ class NetworkMonitor:
                 src = packet.ipv6.src
                 dst = packet.ipv6.dst
             
+            # Check if this packet is from or to a blocked IP
+            if src in self.blocked_ips:
+                # Skip processing and enforce block
+                print(f"Packet from blocked IP {src} detected - enforcing block")
+                # Send TCP RST packets to terminate the connection
+                self.send_reset_packets(src)
+                return
+            
+            if dst in self.blocked_ips:
+                # Skip processing and enforce block
+                print(f"Packet to blocked IP {dst} detected - enforcing block")
+                # Send TCP RST packets to terminate the connection
+                self.send_reset_packets(dst)
+                return
+                
             # Store packet for later reference
             packet_id = f"{timestamp}_{src}_{dst}"
             
@@ -1079,7 +1096,7 @@ class NetworkMonitor:
             # Check packet payload for malicious content
             self.check_packet_payload(packet, src, dst)            
         except Exception as e:
-            print(f"Error analyzing packet: {e}")    
+            print(f"Error analyzing packet: {e}")
             
     def add_packet_to_ui(self, packet, packet_data, packet_id):
         """Add packet to the UI"""
@@ -1301,11 +1318,11 @@ class NetworkMonitor:
             self.packet_details_text.insert(tk.END, f"  Source Port: {packet.udp.srcport}\n")
             self.packet_details_text.insert(tk.END, f"  Destination Port: {packet.udp.dstport}\n")
             if hasattr(packet.udp, 'length'):
-                self.packet_details_text.insert(tk.END, f"  Length: {packet.udp.length}\n")
-
-        # HTTP details
+                self.packet_details_text.insert(tk.END, f"  Length: {packet.udp.length}\n")        # HTTP details
         if hasattr(packet, 'http'):
             self.packet_details_text.insert(tk.END, f"HTTP Details:\n")
+            
+            # First try common attribute names
             if hasattr(packet.http, 'request_method'):
                 self.packet_details_text.insert(tk.END, f"  Method: {packet.http.request_method}\n")
             if hasattr(packet.http, 'request_uri'):
@@ -1320,6 +1337,40 @@ class NetworkMonitor:
                 self.packet_details_text.insert(tk.END, f"  User-Agent: {packet.http.user_agent}\n")
             if hasattr(packet.http, 'host'):
                 self.packet_details_text.insert(tk.END, f"  Host: {packet.http.host}\n")
+            
+            # Enhanced HTTP header examination - check all http attributes
+            displayed_headers = set(['request_method', 'request_uri', 'request_version', 
+                                     'response_code', 'response_phrase', 'user_agent', 'host'])
+            
+            # Get all attributes
+            all_attrs = dir(packet.http)
+            
+            # Extract and display headers that might be in different formats
+            for attr in all_attrs:
+                if attr.startswith('__') or attr in displayed_headers:
+                    continue
+                
+                try:
+                    value = getattr(packet.http, attr)
+                    
+                    # Skip methods and internal attributes
+                    if callable(value) or attr.startswith('_'):
+                        continue
+                    
+                    # Format the header name nicely
+                    header_name = attr.replace('_', '-').title()
+                    self.packet_details_text.insert(tk.END, f"  {header_name}: {value}\n")
+                except Exception:
+                    pass
+                    
+            # If PyShark provides a fields dictionary, try to extract HTTP headers
+            if hasattr(packet.http, '_all_fields'):
+                for field_name, field_value in packet.http._all_fields.items():
+                    if field_name.startswith('http.') and 'header' in field_name:
+                        header_parts = field_name.split('.')
+                        if len(header_parts) >= 3:
+                            header_name = header_parts[-2].replace('_', '-').title()
+                            self.packet_details_text.insert(tk.END, f"  {header_name}: {field_value}\n")
                   # DNS details
         if hasattr(packet, 'dns'):
             self.packet_details_text.insert(tk.END, f"DNS Details:\n")
@@ -1591,7 +1642,7 @@ class NetworkMonitor:
                                 displayed_something = True
                         except Exception:
                             pass  # Skip if attribute access causes error
-                
+
                 # Check for service discovery information
                 if hasattr(packet.mdns, 'service'):
                     self.packet_details_text.insert(tk.END, f"  Service: {packet.mdns.service}\n")
@@ -1682,9 +1733,32 @@ class NetworkMonitor:
         self.notebook.select(self.alerts_tab)
         
         # Play an alert sound
-        self.root.bell()
-
-
+        self.root.bell()    
+        
+    def send_reset_packets(self, ip):
+        """Send TCP reset packets to an IP address to terminate connections"""
+        try:
+            # Use the local interface for sending packets
+            iface = self.interface['scapy_name']
+            
+            # Create a TCP Reset packet with flags="R" to multiple common ports
+            # This will reset any active connections to these ports
+            common_ports = [80, 443, 22, 21, 25, 110, 143, 3389, 8080]
+            for port in common_ports:
+                # Create a packet with the Reset flag set
+                pkt = IP(dst=ip)/TCP(flags="R", dport=port)
+                # Send the packet without verbose output
+                send(pkt, verbose=0, iface=iface)
+            
+            # Also send a more comprehensive packet for a range of ports
+            # This covers other potential connections
+            fin_pkt = IP(dst=ip)/TCP(flags="F", dport=(1024, 10000))
+            send(fin_pkt, verbose=0, iface=iface, count=1)
+            
+            print(f"Sent TCP RST packets to {ip} on common ports")
+        except Exception as e:
+            print(f"Error sending reset packets: {e}")
+    
     def block_ip(self, ip, reason):
         """Block an IP address"""
         if ip in self.blocked_ips:
@@ -1701,14 +1775,8 @@ class NetworkMonitor:
         
         # Send TCP RST packets using Scapy to terminate connections
         try:
-            # This would normally be implemented with actual Scapy code
-            # to send RST packets to the malicious IP
             print(f"Blocking {ip} with RST packets")
-            
-            # In a real implementation, we would use Scapy to craft and send RST packets
-            # Example (not actually executed here for safety):
-            # pkt =IP(dst=ip)/TCP(flags="R", dport=range(1, 1024))
-            # send(pkt, verbose=0)
+            self.send_reset_packets(ip)
         except Exception as e:
             print(f"Error blocking IP: {e}")
 
@@ -1731,8 +1799,6 @@ class NetworkMonitor:
         self.blocked_tree.delete(item_id)
         
         messagebox.showinfo("Unblock", f"IP {ip} has been unblocked")
-
-
     def execute_response(self):
         """Execute the selected response action for the selected alert"""
         # Get selected alert
@@ -1750,8 +1816,17 @@ class NetworkMonitor:
         
         # Execute the action
         if action == "Block IP":
+            # Block the IP permanently regardless of severity level
             self.block_ip(src_ip, "Manual block from alert")
-            messagebox.showinfo("Response", f"Blocked IP {src_ip}")
+            # Switch to the Blocked IPs tab to show the user that the IP was blocked
+            self.notebook.select(self.alerts_tab)
+            # Highlight the newly blocked IP in the blocked IPs list
+            for item in self.blocked_tree.get_children():
+                if self.blocked_tree.item(item, "values")[0] == src_ip:
+                    self.blocked_tree.selection_set(item)
+                    self.blocked_tree.see(item)
+                    break
+            messagebox.showinfo("Response", f"IP {src_ip} has been permanently blocked.\nUse 'Unblock Selected' to remove this block if needed.")
         elif action == "Reset Connection":
             # This would use Scapy to send RST packets
             messagebox.showinfo("Response", f"Reset connections from {src_ip}")
@@ -1801,7 +1876,6 @@ class NetworkMonitor:
             messagebox.showerror("Error", "Please enter valid numbers for all thresholds")
             print(f"Configuration error: {ve}")
 
-    
     def analyze_flow(self, flow):
         """Analyze a network flow for security issues"""
         risk_score = 0
@@ -1810,6 +1884,19 @@ class NetworkMonitor:
             # Extract flow info
             src_ip = flow.src_ip if hasattr(flow, 'src_ip') else "Unknown"
             dst_ip = flow.dst_ip if hasattr(flow, 'dst_ip') else "Unknown"
+            
+            # Check if either IP is in the blocked list (permanent block)
+            if src_ip in self.blocked_ips:
+                # Auto-block this flow since it's from a blocked IP
+                self.block_ip(src_ip, "Previously blocked IP detected")
+                risk_score += 100
+                return risk_score
+            
+            if dst_ip in self.blocked_ips:
+                # Auto-block this flow since it's going to a blocked IP
+                self.block_ip(dst_ip, "Previously blocked IP detected")
+                risk_score += 100
+                return risk_score
             
             # Check for known malicious IPs
             if src_ip in self.threat_ips:
@@ -1822,6 +1909,10 @@ class NetworkMonitor:
                     "alert_type": "Malicious Source IP",
                     "details": f"Connection from known malicious IP: {src_ip}"
                 }))
+                
+                # Auto-block if auto-respond is enabled
+                if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
+                    self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Malicious source IP - auto-blocked"))
             
             if dst_ip in self.threat_ips:
                 risk_score += 80
@@ -1833,6 +1924,10 @@ class NetworkMonitor:
                     "alert_type": "Malicious Destination IP",
                     "details": f"Connection to known malicious IP: {dst_ip}"
                 }))
+                
+                # Auto-block if auto-respond is enabled
+                if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
+                    self.root.after(0, lambda ip=dst_ip: self.block_ip(ip, "Malicious destination IP - auto-blocked"))
             
             # Check for traffic anomalies
             if hasattr(flow, 'bidirectional_packets') and flow.bidirectional_packets > self.thresholds["max_packets_per_second"]:
@@ -2038,7 +2133,7 @@ class NetworkMonitor:
                       # Process captured packets - checking monitoring state before each operation
                 try:
                     if not self.is_monitoring:
-                        print(f"Monitoring stopped before packet processing for flow {flow_key}")
+                        print(f"Monitoring stopped during packet processing for flow {flow_key}")
                         return
                     
                     # Create a local copy of packets to process to avoid any potential async issues
@@ -2245,3 +2340,4 @@ class NetworkMonitor:
             
         except Exception as e:
             print(f"Error killing PyShark processes: {e}")
+

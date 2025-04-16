@@ -39,6 +39,7 @@ dependencies = [
     "pytz==2025.1",
     "pywin32==308",
     "pyzmq==26.2.1",
+    "requests>=2.32.3",
     "scapy==2.6.1",
     "scikit-learn==1.6.1",
     "scipy==1.15.2",

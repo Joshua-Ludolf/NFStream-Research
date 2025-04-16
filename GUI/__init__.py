@@ -20,6 +20,7 @@ import asyncio
 import queue 
 import signal
 import contextlib
+import psutil
 
 # __init__.py
 
