@@ -1250,9 +1250,8 @@ class NetworkMonitor:
                     "details": f"Packet from known malicious IP: {src_ip}"
                 }
                 self.root.after(0, lambda a=alert_details: self.add_alert(a))
-                
-                # Auto-block if auto-respond is enabled
-                if self.auto_response_var.get():
+                  # Auto-block if auto-respond is enabled and default response is Block IP
+                if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
                     self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Malicious source IP - auto-blocked"))
             
             if dst_ip in self.threat_ips:
@@ -1803,7 +1802,7 @@ class NetworkMonitor:
         
         # Play an alert sound
         self.root.bell()    
-        
+          
     def send_reset_packets(self, ip):
         """Send TCP reset packets to an IP address to terminate connections"""
         try:
@@ -1818,6 +1817,11 @@ class NetworkMonitor:
                 pkt = IP(dst=ip)/TCP(flags="R", dport=port)
                 # Send the packet without verbose output
                 send(pkt, verbose=0, iface=iface)
+                
+                # Also send RST packet in the other direction (as source IP)
+                # This helps ensure connections are terminated in both directions
+                src_pkt = IP(src=ip)/TCP(flags="R", sport=port)
+                send(src_pkt, verbose=0, iface=iface)
             
             # Also send a more comprehensive packet for a range of ports
             # This covers other potential connections

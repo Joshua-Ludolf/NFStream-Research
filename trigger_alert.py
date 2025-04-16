@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 
 """
-Alert Trigger Script for Network Monitor
+Alert Trigger Script for Network Monitor (LOCAL IP VERSION)
 
 This script triggers alerts in the Network Monitor application (gui.py) by:
 1. Sending suspicious network traffic with patterns matching the monitor's detection rules
 2. Using packets with known malicious signatures
 3. Generating traffic to/from IPs that are in the blacklist
 
+This version ONLY sends traffic to your local IP address for safety.
+
 Usage:
-    python trigger_alert.py [options]
+    python trigger_alert_local.py [options]
 """
 
 import argparse
@@ -268,9 +270,9 @@ def run_all_triggers(target_ip, dns_server, intensity=1):
     print("Alert triggering complete!")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Trigger alerts in Network Monitor by generating suspicious traffic")
-    parser.add_argument("--target", type=str, help="Target IP address for sending packets (default: local gateway)")
-    parser.add_argument("--dns", type=str, help="DNS server IP for malicious domain lookups (default: 8.8.8.8)")
+    parser = argparse.ArgumentParser(description="Trigger alerts in Network Monitor by generating suspicious traffic ONLY to local IP")
+    parser.add_argument("--target", type=str, help="Target IP address (IGNORED - local IP is always used for safety)")
+    parser.add_argument("--dns", type=str, help="DNS server IP (IGNORED - local IP is always used for safety)")
     parser.add_argument("--intensity", type=int, default=5, help="Intensity of traffic generation (1-10, default: 5)")
     parser.add_argument("--high-traffic", action="store_true", help="Generate high traffic volume to trigger anomaly detection")
     parser.add_argument("--malicious-ip", action="store_true", help="Spoof traffic from known malicious IPs")
@@ -280,25 +282,23 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Determine target IP and DNS server
-    if not args.target:
-        # Try to get the default gateway
-        try:
-            gateway = scapy.conf.route.route("0.0.0.0")[2]
-            target_ip = gateway if gateway != "0.0.0.0" else "127.0.0.1"
-        except:
-            target_ip = "127.0.0.1"
-    else:
-        target_ip = args.target
+    # ALWAYS use local IP as target and DNS server for safety
+    local_ip = get_local_ip()
+    target_ip = local_ip
+    dns_server = local_ip
     
-    dns_server = args.dns if args.dns else "8.8.8.8"
-    
-    print(f"Alert Trigger Script")
-    print(f"===================")
-    print(f"Target IP: {target_ip}")
-    print(f"DNS Server: {dns_server}")
+    # Show warning if user tried to provide target or DNS server
+    if args.target:
+        print(f"WARNING: Ignoring provided target IP {args.target} - using local IP {local_ip} for safety")
+    if args.dns:
+        print(f"WARNING: Ignoring provided DNS server {args.dns} - using local IP {local_ip} for safety")
+        
+    print(f"Alert Trigger Script (LOCAL IP VERSION)")
+    print(f"====================================")
+    print(f"Target IP: {target_ip} (using local IP for safety)")
+    print(f"DNS Server: {dns_server} (using local IP for safety)")
     print(f"Intensity: {args.intensity}")
-    print(f"===================")
+    print(f"====================================")
     
     # Execute selected operations
     if args.all:
