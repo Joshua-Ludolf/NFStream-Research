@@ -1124,7 +1124,6 @@ class NetworkMonitor:
         # Auto-scroll to show latest
         self.packets_tree.see(item_id)
 
-    
     def get_packet_summary(self, packet):
         """Generate a summary of the packet"""
         summary = packet.highest_layer
@@ -1153,14 +1152,20 @@ class NetworkMonitor:
         elif hasattr(packet, 'udp'):
             summary = f"UDP {packet.udp.srcport} → {packet.udp.dstport}"
         
-        if hasattr(packet, 'dns'):
+        # Handle DNS packets safely with proper error handling
+        try:
+            if hasattr(packet, 'dns'):
                 if hasattr(packet.dns, 'qry_name'):
-                    summary = f"DNS Query for {packet.dns.qry_name}"
+                    dns_name = getattr(packet.dns, 'qry_name', "unknown")
+                    summary = f"DNS Query for {dns_name}"
                 elif hasattr(packet.dns, 'resp_name'):
-                    summary = f"DNS Response for {packet.dns.resp_name}"
+                    dns_name = getattr(packet.dns, 'resp_name', "unknown")
+                    summary = f"DNS Response for {dns_name}"
+        except Exception as e:
+            print(f"Error processing DNS packet summary: {e}")
+            summary = "DNS Packet (error processing details)"
         
         return summary
-    
     def check_packet_payload(self, packet, src_ip, dst_ip):
         """Check packet payload for malicious content"""
         try:
@@ -1171,7 +1176,7 @@ class NetworkMonitor:
                 # Check for suspicious patterns
                 for pattern in self.suspicious_patterns:
                     if re.search(pattern, payload):
-                        # Found a suspicious pattern
+                        # Found a suspicious pattern - always use HIGH severity for payload matches
                         alert_details = {
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "severity": "High",
@@ -1186,23 +1191,87 @@ class NetworkMonitor:
                         if self.auto_response_var.get():
                             self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Suspicious payload"))
                         break
+                        
+            # Check for suspicious DNS queries
+            if hasattr(packet, 'dns') and hasattr(packet.dns, 'qry_name'):
+                try:
+                    dns_query = str(packet.dns.qry_name).lower()
+                    
+                    # Check if this is a query for a known malicious domain
+                    for domain in self.threat_domains:
+                        if domain.lower() in dns_query:
+                            alert_details = {
+                                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "severity": "High", 
+                                "source": src_ip,
+                                "destination": dst_ip,
+                                "alert_type": "Malicious DNS Query",
+                                "details": f"Query for known malicious domain: {dns_query}"
+                            }
+                            self.root.after(0, lambda a=alert_details: self.add_alert(a))
+                            
+                            # Auto-respond if enabled
+                            if self.auto_response_var.get():
+                                # Use a lambda to avoid immediate execution
+                                self.root.after(0, lambda ip=src_ip: self.block_ip(ip, f"DNS query for malicious domain: {dns_query}"))
+                            break
+                except Exception as dns_error:
+                    print(f"Error processing DNS query check: {dns_error}")
+                    # Continue processing other aspects of the packet even if DNS check fails
             
             # Check for HTTP suspicious user agents
             if hasattr(packet, 'http') and hasattr(packet.http, 'user_agent'):
                 user_agent = packet.http.user_agent
                 for pattern in self.suspicious_patterns:
                     if re.search(pattern, user_agent):
+                        # User agent matches are now HIGH severity to match Scapy's alerts
                         alert_details = {
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "severity": "Medium",
+                            "severity": "High",
                             "source": src_ip,
                             "destination": dst_ip,
                             "alert_type": "Suspicious User Agent",
                             "details": f"Suspicious user agent: {user_agent}"
                         }
                         self.root.after(0, lambda a=alert_details: self.add_alert(a))
+                        
+                        # Auto-respond to suspicious user agents the same as payloads
+                        if self.auto_response_var.get():
+                            self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Suspicious user agent"))
+            
+            # Also check if IP is in our threat list (consistent with flow analysis)
+            if src_ip in self.threat_ips:
+                alert_details = {
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "severity": "High",
+                    "source": src_ip,
+                    "destination": dst_ip,
+                    "alert_type": "Malicious Source IP",
+                    "details": f"Packet from known malicious IP: {src_ip}"
+                }
+                self.root.after(0, lambda a=alert_details: self.add_alert(a))
+                
+                # Auto-block if auto-respond is enabled
+                if self.auto_response_var.get():
+                    self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Malicious source IP - auto-blocked"))
+            
+            if dst_ip in self.threat_ips:
+                alert_details = {
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "severity": "High",
+                    "source": src_ip,
+                    "destination": dst_ip,
+                    "alert_type": "Malicious Destination IP",
+                    "details": f"Packet to known malicious IP: {dst_ip}"
+                }
+                self.root.after(0, lambda a=alert_details: self.add_alert(a))
+                
+                # Auto-block if auto-respond is enabled
+                if self.auto_response_var.get():
+                    self.root.after(0, lambda ip=dst_ip: self.block_ip(ip, "Malicious destination IP - auto-blocked"))
+                    
         except Exception as e:
-            print(f"Error checking packet payload: {e}")    
+            print(f"Error checking packet payload: {e}")
             
     def show_packet_details(self, event):
         """Show detailed information about the selected packet"""
@@ -1764,21 +1833,40 @@ class NetworkMonitor:
         if ip in self.blocked_ips:
             return  # Already blocked
         
-        self.blocked_ips.add(ip)
-        
-        # Add to blocked list UI
-        item_id = self.blocked_tree.insert("", "end", values=(
-            ip,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            reason
-        ))
-        
-        # Send TCP RST packets using Scapy to terminate connections
+        # Validate IP address before blocking to avoid crashes
         try:
-            print(f"Blocking {ip} with RST packets")
-            self.send_reset_packets(ip)
+            # Check if it's a valid IP
+            ipaddress.ip_address(ip)
+            
+            # Add to blocked set
+            self.blocked_ips.add(ip)
+            
+            # Add to blocked list UI
+            item_id = self.blocked_tree.insert("", "end", values=(
+                ip,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                reason
+            ))
+            
+            # Send TCP RST packets using Scapy to terminate connections
+            try:
+                print(f"Blocking {ip} with RST packets")
+                self.send_reset_packets(ip)
+            except Exception as e:
+                print(f"Error sending reset packets: {e}")
+                
+            # Ensure proper refresh of the UI
+            self.root.update_idletasks()
+            
+            return True
+        except ValueError:
+            print(f"Invalid IP address format: {ip}, could not block")
+            messagebox.showerror("Error", f"Invalid IP address format: {ip}")
+            return False
         except Exception as e:
-            print(f"Error blocking IP: {e}")
+            print(f"Error blocking IP {ip}: {e}")
+            messagebox.showerror("Error", f"Failed to block IP {ip}: {e}")
+            return False
 
 
     def unblock_selected_ip(self):
