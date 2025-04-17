@@ -1191,12 +1191,19 @@ class NetworkMonitor:
                         if self.auto_response_var.get():
                             self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Suspicious payload"))
                         break
-                        
-            # Check for suspicious DNS queries
+                          # Check for suspicious DNS queries
             if hasattr(packet, 'dns') and hasattr(packet.dns, 'qry_name'):
                 try:
                     dns_query = str(packet.dns.qry_name).lower()
                     
+                    # Check if this packet involves a blocked DNS server (either source or destination)
+                    # This handles the case where an IP was blocked but DNS queries are still coming through
+                    if dst_ip in self.blocked_ips and hasattr(packet, 'udp') and hasattr(packet.udp, 'dstport') and packet.udp.dstport == '53':
+                        print(f"Blocking DNS query to blocked server {dst_ip}")
+                        # For DNS, we need to drop all future packets rather than just sending RST
+                        # No need to send another alert since the IP is already blocked
+                        return
+                        
                     # Check if this is a query for a known malicious domain
                     for domain in self.threat_domains:
                         if domain.lower() in dns_query:
@@ -1210,10 +1217,12 @@ class NetworkMonitor:
                             }
                             self.root.after(0, lambda a=alert_details: self.add_alert(a))
                             
-                            # Auto-respond if enabled
-                            if self.auto_response_var.get():
-                                # Use a lambda to avoid immediate execution
+                            # Auto-respond if enabled and set to Block IP
+                            if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
+                                # Block both the client making the query and the DNS server
                                 self.root.after(0, lambda ip=src_ip: self.block_ip(ip, f"DNS query for malicious domain: {dns_query}"))
+                                if dst_ip != src_ip:  # Avoid blocking twice if it's the same IP
+                                    self.root.after(0, lambda ip=dst_ip: self.block_ip(ip, f"DNS server for malicious domain: {dns_query}"))
                             break
                 except Exception as dns_error:
                     print(f"Error processing DNS query check: {dns_error}")
