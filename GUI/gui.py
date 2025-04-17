@@ -540,19 +540,22 @@ class NetworkMonitor:
         
         response_frame = ttk.LabelFrame(self.config_tab, text="Response Configuration")
         response_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Detection thresholds        ttk.Label(detection_frame, text="Max packets per second:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+          # Detection thresholds        
+        ttk.Label(detection_frame, text="Max packets per second:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_pps_var = tk.StringVar(value=str(self.thresholds["max_packets_per_second"]))
-        ttk.Entry(detection_frame, textvariable=self.max_pps_var, width=10, state="readonly").grid(row=0, column=1, padx=5, pady=5)
+        ttk.Entry(detection_frame, textvariable=self.max_pps_var, width=10).grid(row=0, column=1, padx=5, pady=5)
+        
         ttk.Label(detection_frame, text="Max connections per minute:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_conn_var = tk.StringVar(value=str(self.thresholds["max_connections_per_minute"]))
-        ttk.Entry(detection_frame, textvariable=self.max_conn_var, width=10, state="readonly").grid(row=1, column=1, padx=5, pady=5)
+        ttk.Entry(detection_frame, textvariable=self.max_conn_var, width=10).grid(row=1, column=1, padx=5, pady=5)
+        
         ttk.Label(detection_frame, text="Max DNS queries per minute:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_dns_var = tk.StringVar(value=str(self.thresholds["max_dns_queries_per_minute"]))
-        ttk.Entry(detection_frame, textvariable=self.max_dns_var, width=10, state="readonly").grid(row=2, column=1, padx=5, pady=5)
+        ttk.Entry(detection_frame, textvariable=self.max_dns_var, width=10).grid(row=2, column=1, padx=5, pady=5)
+        
         ttk.Label(detection_frame, text="Max failed connections:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_failed_var = tk.StringVar(value=str(self.thresholds["max_failed_connections"]))
-        ttk.Entry(detection_frame, textvariable=self.max_failed_var, width=10, state="readonly").grid(row=3, column=1, padx=5, pady=5)
+        ttk.Entry(detection_frame, textvariable=self.max_failed_var, width=10).grid(row=3, column=1, padx=5, pady=5)
           # Custom malicious IP input
         ttk.Label(detection_frame, text="Add malicious IP:").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
         self.new_malicious_ip = ttk.Entry(detection_frame, width=20, state="readonly")
@@ -647,13 +650,12 @@ class NetworkMonitor:
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
             self.status_label.config(text="Monitoring stopped")
-            
-            # Clear flow tracking
+              # Clear flow tracking
             with self.flow_tracking_lock:
                 self.flow_tracking.clear()
                 
-            # Clear packet store to free memory
-            self.packet_store.clear()
+            # We no longer clear the packet_store here to preserve packet details
+            # packet_store will only be cleared when the application is closed or monitoring is restarted
             
             # Reset any queues that might be blocked
             if hasattr(self, 'flow_packet_queue'):
@@ -1219,10 +1221,9 @@ class NetworkMonitor:
                             
                             # Auto-respond if enabled and set to Block IP
                             if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
-                                # Block both the client making the query and the DNS server
+                                # Only block the source IP (client making the query)
                                 self.root.after(0, lambda ip=src_ip: self.block_ip(ip, f"DNS query for malicious domain: {dns_query}"))
-                                if dst_ip != src_ip:  # Avoid blocking twice if it's the same IP
-                                    self.root.after(0, lambda ip=dst_ip: self.block_ip(ip, f"DNS server for malicious domain: {dns_query}"))
+                                # No longer block the DNS server
                             break
                 except Exception as dns_error:
                     print(f"Error processing DNS query check: {dns_error}")
@@ -1274,9 +1275,9 @@ class NetworkMonitor:
                 }
                 self.root.after(0, lambda a=alert_details: self.add_alert(a))
                 
-                # Auto-block if auto-respond is enabled
+                # Auto-block source IP even when destination is malicious (as requested)
                 if self.auto_response_var.get():
-                    self.root.after(0, lambda ip=dst_ip: self.block_ip(ip, "Malicious destination IP - auto-blocked"))
+                    self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Source of traffic to malicious destination - auto-blocked"))
                     
         except Exception as e:
             print(f"Error checking packet payload: {e}")
@@ -1448,7 +1449,7 @@ class NetworkMonitor:
                         if len(header_parts) >= 3:
                             header_name = header_parts[-2].replace('_', '-').title()
                             self.packet_details_text.insert(tk.END, f"  {header_name}: {field_value}\n")
-                  # DNS details
+            
         if hasattr(packet, 'dns'):
             self.packet_details_text.insert(tk.END, f"DNS Details:\n")
             
@@ -1689,36 +1690,36 @@ class NetworkMonitor:
                     self.packet_details_text.insert(tk.END, f"  [TLS packet detected but no detailed fields available]\n")
             
         if hasattr(packet, 'mdns'):
-                self.packet_details_text.insert(tk.END, f"mDNS Details:\n")
-                
-                # Get all available attributes for mDNS
-                mdns_attributes = dir(packet.mdns)
-                displayed_something = False
-                
-                # Check common mDNS attributes
-                if hasattr(packet.mdns, 'transaction_id'):
-                    self.packet_details_text.insert(tk.END, f"  Transaction ID: {packet.mdns.transaction_id}\n")
-                    displayed_something = True
-                if hasattr(packet.mdns, 'flags'):
-                    self.packet_details_text.insert(tk.END, f"  Flags: {packet.mdns.flags}\n")
-                    displayed_something = True
-                if hasattr(packet.mdns, 'questions'):
-                    self.packet_details_text.insert(tk.END, f"  Questions: {packet.mdns.questions}\n")
-                    displayed_something = True
-                if hasattr(packet.mdns, 'answers'):
-                    self.packet_details_text.insert(tk.END, f"  Answers: {packet.mdns.answers}\n")
-                    displayed_something = True
-                
-                # Add any other useful mDNS attributes that might be present
-                for attr in ['qry_name', 'qry_type', 'resp_name', 'count_queries', 'count_answers']:
-                    if attr in mdns_attributes:
-                        try:
-                            value = getattr(packet.mdns, attr)
-                            if value:
-                                self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
-                                displayed_something = True
-                        except Exception:
-                            pass  # Skip if attribute access causes error
+            self.packet_details_text.insert(tk.END, f"mDNS Details:\n")
+            
+            # Get all available attributes for mDNS
+            mdns_attributes = dir(packet.mdns)
+            displayed_something = False
+            
+            # Check common mDNS attributes
+            if hasattr(packet.mdns, 'transaction_id'):
+                self.packet_details_text.insert(tk.END, f"  Transaction ID: {packet.mdns.transaction_id}\n")
+                displayed_something = True
+            if hasattr(packet.mdns, 'flags'):
+                self.packet_details_text.insert(tk.END, f"  Flags: {packet.mdns.flags}\n")
+                displayed_something = True
+            if hasattr(packet.mdns, 'questions'):
+                self.packet_details_text.insert(tk.END, f"  Questions: {packet.mdns.questions}\n")
+                displayed_something = True
+            if hasattr(packet.mdns, 'answers'):
+                self.packet_details_text.insert(tk.END, f"  Answers: {packet.mdns.answers}\n")
+                displayed_something = True
+            
+            # Add any other useful mDNS attributes that might be present
+            for attr in ['qry_name', 'qry_type', 'resp_name', 'count_queries', 'count_answers']:
+                if attr in mdns_attributes:
+                    try:
+                        value = getattr(packet.mdns, attr)
+                        if value:
+                            self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
+                            displayed_something = True
+                    except Exception:
+                        pass  # Skip if attribute access causes error
 
                 # Check for service discovery information
                 if hasattr(packet.mdns, 'service'):
@@ -1758,32 +1759,6 @@ class NetworkMonitor:
                         except Exception:
                             pass  # Skip if attribute access causes error
             
-        if hasattr(packet, 'mdns'):
-                self.packet_details_text.insert(tk.END, f"mDNS Details:\n")
-                
-                # Get all available attributes for mDNS
-                mdns_attributes = dir(packet.mdns)
-                displayed_something = False
-                
-                # Check common mDNS attributes
-                if hasattr(packet.mdns, 'transaction_id'):
-                    self.packet_details_text.insert(tk.END, f"  Transaction ID: {packet.mdns.transaction_id}\n")
-                    displayed_something = True
-                if hasattr(packet.mdns, 'flags'):
-                    self.packet_details_text.insert(tk.END, f"  Flags: {packet.mdns.flags}\n")
-                    displayed_something = True
-                
-                # Look for additional mDNS fields that might exist
-                for attr in ['query_type', 'response_code', 'answers']:
-                    if attr in mdns_attributes:
-                        try:
-                            value = getattr(packet.mdns, attr)
-                            if value:
-                                self.packet_details_text.insert(tk.END, f"  {attr.replace('_', ' ').title()}: {value}\n")
-                                displayed_something = True
-                        except Exception:
-                            pass  # Skip if attribute access causes error
-
     def add_alert(self, alert_details):
         """Add an alert to the alerts tab"""
         # Add to tree
@@ -1900,6 +1875,7 @@ class NetworkMonitor:
         self.blocked_tree.delete(item_id)
         
         messagebox.showinfo("Unblock", f"IP {ip} has been unblocked")
+    
     def execute_response(self):
         """Execute the selected response action for the selected alert"""
         # Get selected alert
@@ -1908,17 +1884,20 @@ class NetworkMonitor:
             messagebox.showinfo("Info", "No alert selected")
             return
         
-        # Get source IP from the selected alert
+        # Get alert details from the selected alert
         alert_item = selected_alerts[0]
-        src_ip = self.alerts_tree.item(alert_item, "values")[2]  # Source IP is in the 3rd column
+        alert_values = self.alerts_tree.item(alert_item, "values")
+        
+        # Use the Source IP (column 2) for all actions - this is the malicious IP
+        src_ip = alert_values[2]  # Source IP is in the 3rd column
         
         # Get selected response action
         action = self.response_combobox.get()
         
         # Execute the action
         if action == "Block IP":
-            # Block the IP permanently regardless of severity level
-            self.block_ip(src_ip, "Manual block from alert")
+            # Block the Source IP permanently regardless of alert type
+            self.block_ip(src_ip, f"Manual block from alert: {alert_values[4]}")
             # Switch to the Blocked IPs tab to show the user that the IP was blocked
             self.notebook.select(self.alerts_tab)
             # Highlight the newly blocked IP in the blocked IPs list
@@ -1927,12 +1906,13 @@ class NetworkMonitor:
                     self.blocked_tree.selection_set(item)
                     self.blocked_tree.see(item)
                     break
-            messagebox.showinfo("Response", f"IP {src_ip} has been permanently blocked.\nUse 'Unblock Selected' to remove this block if needed.")
+            messagebox.showinfo("Response", f"Source IP {src_ip} has been permanently blocked.\nUse 'Unblock Selected' to remove this block if needed.")
         elif action == "Reset Connection":
-            # This would use Scapy to send RST packets
+            self.send_reset_packets(src_ip)
             messagebox.showinfo("Response", f"Reset connections from {src_ip}")
         elif action == "Log Only":
-            messagebox.showinfo("Response", f"Logged activity from {src_ip}")    # Filter functionality removed as requested
+            messagebox.showinfo("Response", f"Logged activity from {src_ip}")
+
 
     
     def add_malicious_ip(self):
@@ -2011,7 +1991,7 @@ class NetworkMonitor:
                     "details": f"Connection from known malicious IP: {src_ip}"
                 }))
                 
-                # Auto-block if auto-respond is enabled
+                # Auto-block if auto-respond is enabled and default response is Block IP
                 if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
                     self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Malicious source IP - auto-blocked"))
             
@@ -2026,9 +2006,9 @@ class NetworkMonitor:
                     "details": f"Connection to known malicious IP: {dst_ip}"
                 }))
                 
-                # Auto-block if auto-respond is enabled
+                # Auto-block source IP even when destination is malicious (as requested)
                 if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
-                    self.root.after(0, lambda ip=dst_ip: self.block_ip(ip, "Malicious destination IP - auto-blocked"))
+                    self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Source of traffic to malicious destination - auto-blocked"))
             
             # Check for traffic anomalies
             if hasattr(flow, 'bidirectional_packets') and flow.bidirectional_packets > self.thresholds["max_packets_per_second"]:
