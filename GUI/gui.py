@@ -547,7 +547,8 @@ class NetworkMonitor:
         
         response_frame = ttk.LabelFrame(self.config_tab, text="Response Configuration")
         response_frame.pack(fill=tk.X, padx=10, pady=10)
-          # Detection thresholds        
+        
+        # Detection thresholds        
         ttk.Label(detection_frame, text="Max packets per second:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         self.max_pps_var = tk.StringVar(master=self.root, value=str(self.thresholds["max_packets_per_second"]))
         ttk.Entry(detection_frame, textvariable=self.max_pps_var, width=10).grid(row=0, column=1, padx=5, pady=5)
@@ -653,10 +654,12 @@ class NetworkMonitor:
             self.close_active_captures()
 
             # Ensure all PyShark processes are terminated
-            self.kill_pyshark_processes()            # Reset UI state
+            self.kill_pyshark_processes()
+            
+            # Reset UI state - FIXED: Ensuring start button is enabled
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
-            self.status_label.config(text="Monitoring stopped")
+            self.status_label.config(text="Status: Idle")
               # Clear flow tracking
             with self.flow_tracking_lock:
                 self.flow_tracking.clear()

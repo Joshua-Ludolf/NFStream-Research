@@ -3,7 +3,7 @@
 # Real-time Network Detection and Response System
 # Authors: Alexander James, Joshua Ludolf, & Matthew Trevino
 
-from GUI.gui import *
+from GUI.main import *
 
 
 def check_requirements():
