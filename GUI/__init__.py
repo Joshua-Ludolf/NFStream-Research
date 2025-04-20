@@ -2,8 +2,6 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk, scrolledtext
 import threading
 import time
-import pandas as pd
-import numpy as np
 from datetime import datetime
 import os
 import ipaddress
@@ -15,7 +13,6 @@ from scapy.layers.inet import IP, TCP, UDP
 from scapy.sendrecv import send
 import psutil
 import socket
-import uuid
 import asyncio
 import queue 
 import signal

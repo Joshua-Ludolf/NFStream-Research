@@ -24,7 +24,10 @@ import scapy.all as scapy
 from scapy.layers.http import HTTP, HTTPRequest
 from scapy.layers.inet import IP, TCP, UDP
 from scapy.layers.dns import DNS, DNSQR
+import logging
 
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Known malicious IPs from Network Monitor's built-in threats
 # These match the IPs defined in _load_builtin_threats() method
@@ -114,45 +117,45 @@ def send_malicious_http_request(target_ip, user_agent=None, payload=None):
         if payload:
             url += f"/?id={payload}"
         
-        print(f"Sending HTTP request to {url} with headers: {headers}")
+        logging.debug(f"Sending HTTP request to {url} with headers: {headers}")
         response = requests.get(url, headers=headers, timeout=2)
-        print(f"Response: {response.status_code}")
+        logging.debug(f"Response: {response.status_code}")
         return True
     except Exception as e:
-        print(f"HTTP request failed: {e}")
+        logging.error(f"HTTP request failed: {e}")
         return False
 
 def send_tcp_packet_with_scapy(src_ip, dst_ip, dst_port, payload):
     """Send TCP packet with custom payload using Scapy"""
     try:
-        print(f"Sending TCP packet from {src_ip} to {dst_ip}:{dst_port} with payload: {payload}")
+        logging.debug(f"Sending TCP packet from {src_ip} to {dst_ip}:{dst_port} with payload: {payload}")
         packet = IP(src=src_ip, dst=dst_ip) / TCP(sport=random.randint(1024, 65535), dport=dst_port) / payload
         scapy.send(packet, verbose=0)
         return True
     except Exception as e:
-        print(f"Failed to send packet with Scapy: {e}")
+        logging.error(f"Failed to send packet with Scapy: {e}")
         return False
 
 def send_udp_packet_with_scapy(src_ip, dst_ip, dst_port, payload):
     """Send UDP packet with custom payload using Scapy"""
     try:
-        print(f"Sending UDP packet from {src_ip} to {dst_ip}:{dst_port} with payload: {payload}")
+        logging.debug(f"Sending UDP packet from {src_ip} to {dst_ip}:{dst_port} with payload: {payload}")
         packet = IP(src=src_ip, dst=dst_ip) / UDP(sport=random.randint(1024, 65535), dport=dst_port) / payload
         scapy.send(packet, verbose=0)
         return True
     except Exception as e:
-        print(f"Failed to send packet with Scapy: {e}")
+        logging.error(f"Failed to send packet with Scapy: {e}")
         return False
 
 def send_dns_query_with_scapy(src_ip, dst_ip, domain):
     """Send DNS query for potentially malicious domain"""
     try:
-        print(f"Sending DNS query from {src_ip} to {dst_ip} for domain: {domain}")
+        logging.debug(f"Sending DNS query from {src_ip} to {dst_ip} for domain: {domain}")
         packet = IP(src=src_ip, dst=dst_ip) / UDP(sport=random.randint(1024, 65535), dport=53) / DNS(rd=1, qd=DNSQR(qname=domain))
         scapy.send(packet, verbose=0)
         return True
     except Exception as e:
-        print(f"Failed to send DNS query with Scapy: {e}")
+        logging.error(f"Failed to send DNS query with Scapy: {e}")
         return False
 
 def generate_high_packet_rate(target_ip, packet_count=1500, duration=5):

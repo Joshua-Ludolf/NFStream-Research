@@ -167,9 +167,59 @@ class NetworkMonitor:
         self.threat_file_hashes = set()
         self.suspicious_patterns = []
         
-        # Load built-in threat data (fallback)
-        self._load_builtin_threats()
+        # Add suspicious user agents to detection logic
+        self.suspicious_user_agents = [
+            "zgrab/0.x",
+            "sqlmap/1.3.10",
+            "Nikto/2.1.5",
+            "masscan/1.0",
+            "gobuster/3.1.0",
+            "Nmap Scripting Engine"
+        ]
+
+        # Add moderate suspicious payloads to detection logic
+        self.moderate_suspicious_payloads = [
+            "admin' --",
+            "SELECT * FROM users",
+            "<img src=x onerror=console.log(1)>",
+            "default_password",
+            "system32\\drivers",
+            "port scan detected",
+            ".bat.txt",
+            ".ps1.jpg",
+            "net user administrator",
+            "ipconfig /all"
+        ]
+
+        # Add example malicious IPs from trigger_alert.py
+        self.threat_ips.update([
+            "192.168.1.100",  # Example malicious IP
+            "10.0.0.99",      # Example malicious IP
+            "203.0.113.0",    # Example from TEST-NET-3 block
+            "198.51.100.0",   # Example from TEST-NET-2 block
+            "192.0.2.0"       # Example from TEST-NET-1 block
+        ])
         
+        # Add example malicious domains from trigger_alert.py
+        self.threat_domains.update([
+            "malware.example.com",
+            "phishing.test",
+            "evil.local"
+        ])
+        
+        # Add suspicious patterns from trigger_alert.py
+        self.suspicious_patterns.extend([
+            "' OR 1=1 --", 
+            "1'; DROP TABLE users; --",
+            "<script>alert\\('XSS'\\)</script>",
+            "javascript:alert\\('XSS'\\)",
+            "\\| cat /etc/passwd",
+            "; powershell\\.exe -Command 'Get-Process'",
+            "zgrab scanner detected",
+            "nikto scan in progress",
+            "[a-f0-9]{64}"  # Match for hash-like strings
+        ])
+
         # Try to load from local files
         try:
             self._load_threat_files()
@@ -188,51 +238,8 @@ class NetworkMonitor:
         print(f"Loaded {len(self.threat_domains)} malicious domains")
         print(f"Loaded {len(self.threat_file_hashes)} malicious file hashes")
         print(f"Loaded {len(self.suspicious_patterns)} suspicious patterns")
+        self._load_threat_files()
     
-    def _load_builtin_threats(self):
-        """Load built-in threat data as a fallback"""
-        # Example malicious IPs (for demo purposes)
-        builtin_ips = {
-            "192.168.1.100",  # Example malicious IP
-            "10.0.0.99",      # Example malicious IP
-            "203.0.113.0",    # Example from TEST-NET-3 block
-            "198.51.100.0",   # Example from TEST-NET-2 block
-            "192.0.2.0"       # Example from TEST-NET-1 block
-        }
-        self.threat_ips.update(builtin_ips)
-        
-        # Example malicious domains (for demo purposes)
-        builtin_domains = {
-            "malware.example.com",
-            "phishing.test",
-            "evil.local"
-        }
-        self.threat_domains.update(builtin_domains)
-        
-        # Example malicious file hashes (for demo purposes)
-        builtin_hashes = {
-            "44d88612fea8a8f36de82e1278abb02f",  # Example MD5
-            "3395856ce81f2b7382dee72602f798b642f14140",  # Example SHA1
-            "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"  # Example SHA256
-        }
-        self.threat_file_hashes.update(builtin_hashes)
-        
-        # Common suspicious patterns (regex)
-        builtin_patterns = [
-            # Command and control patterns
-            r"(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64})",  # Possible exfil or C2 beaconing
-            # SQL injection patterns
-            r"(\%27)|(\')|(\-\-)|(\%23)|(#)",
-            # XSS patterns
-            r"<script>|javascript:|onerror=|onload=",
-            # Common malware user agents
-            r"(zgrab)|(Nmap Scripting Engine)|(sqlmap)|(nikto)|(masscan)|(gobuster)",
-            # Common shell commands in URLs
-            r"(\/bin\/bash)|(\/bin\/sh)|(cmd\.exe)|(powershell\.exe)",
-            # Common malware file extensions
-            r"\.(exe|dll|bat|cmd|ps1|vbs|js)$"
-        ]
-        self.suspicious_patterns.extend(builtin_patterns)
 
     
     def _load_threat_files(self):
@@ -358,9 +365,9 @@ class NetworkMonitor:
         
         # Create a fixed Wi-Fi interface with hardcoded values
         self.interface = {
-            'nfstream_name': "Realtek RTL8852BE WiFi 6 802.11ax PCIe Adapter", # Replace with actual interface Description
+            'nfstream_name': "Intel(R) Wi-Fi 6 AX201 160MHz", # Replace with actual interface Description
             'pyshark_name': "Wi-Fi", # Replace with wifi (windows) or eth0 (linux) or wlan0 (mac)
-            'scapy_name': "Realtek RTL8852BE WiFi 6 802.11ax PCIe Adapter" # Replace with actual interface Description
+            'scapy_name': "Intel(R) Wi-Fi 6 AX201 160MHz" # Replace with actual interface Description
         }
         # Show which interface we're using
         ttk.Label(self.control_frame, text="Using Wi-Fi Interface").pack(side=tk.LEFT, padx=5)
@@ -542,19 +549,19 @@ class NetworkMonitor:
         response_frame.pack(fill=tk.X, padx=10, pady=10)
           # Detection thresholds        
         ttk.Label(detection_frame, text="Max packets per second:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.max_pps_var = tk.StringVar(value=str(self.thresholds["max_packets_per_second"]))
+        self.max_pps_var = tk.StringVar(master=self.root, value=str(self.thresholds["max_packets_per_second"]))
         ttk.Entry(detection_frame, textvariable=self.max_pps_var, width=10).grid(row=0, column=1, padx=5, pady=5)
         
         ttk.Label(detection_frame, text="Max connections per minute:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        self.max_conn_var = tk.StringVar(value=str(self.thresholds["max_connections_per_minute"]))
+        self.max_conn_var = tk.StringVar(master=self.root, value=str(self.thresholds["max_connections_per_minute"]))
         ttk.Entry(detection_frame, textvariable=self.max_conn_var, width=10).grid(row=1, column=1, padx=5, pady=5)
         
         ttk.Label(detection_frame, text="Max DNS queries per minute:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
-        self.max_dns_var = tk.StringVar(value=str(self.thresholds["max_dns_queries_per_minute"]))
+        self.max_dns_var = tk.StringVar(master=self.root, value=str(self.thresholds["max_dns_queries_per_minute"]))
         ttk.Entry(detection_frame, textvariable=self.max_dns_var, width=10).grid(row=2, column=1, padx=5, pady=5)
         
         ttk.Label(detection_frame, text="Max failed connections:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
-        self.max_failed_var = tk.StringVar(value=str(self.thresholds["max_failed_connections"]))
+        self.max_failed_var = tk.StringVar(master=self.root, value=str(self.thresholds["max_failed_connections"]))
         ttk.Entry(detection_frame, textvariable=self.max_failed_var, width=10).grid(row=3, column=1, padx=5, pady=5)
           # Custom malicious IP input
         ttk.Label(detection_frame, text="Add malicious IP:").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
@@ -564,12 +571,12 @@ class NetworkMonitor:
         
         # Response options
         ttk.Label(response_frame, text="Default response:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.default_response_var = tk.StringVar(value="Block IP")
+        self.default_response_var = tk.StringVar(master=self.root, value="Block IP")
         ttk.Combobox(response_frame, textvariable=self.default_response_var, 
                     values=["Block IP", "Reset Connection", "Log Only"], 
                     state="readonly").grid(row=0, column=1, padx=5, pady=5)
         
-        self.auto_response_var = tk.BooleanVar(value=True)
+        self.auto_response_var = tk.BooleanVar(master=self.root, value=True)
         ttk.Checkbutton(response_frame, text="Auto-respond to threats", 
                        variable=self.auto_response_var).grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=tk.W)
         
@@ -793,164 +800,89 @@ class NetworkMonitor:
         """NFStream monitoring process"""
         try:
             interface_name = self.interface['nfstream_name']
-            
+
             # Create a NFStreamer instance for real-time monitoring
             streamer = NFStreamer(source=interface_name, 
                                 active_timeout=1, 
                                 idle_timeout=30,
                                 accounting_mode=0,  # 0 = online mode
                                 bpf_filter=None)    # No BPF filter to capture all traffic
+
             # Create flow tracking dictionary to correlate flows with packets
             self.flow_tracking = {}
             self.flow_tracking_lock = threading.Lock()
-            
+
             # Process flows
             for flow in streamer:
                 if not self.is_monitoring:
                     break
-                
+
+                # Skip flows involving blocked IPs
+                src_ip = getattr(flow, 'src_ip', None)
+                dst_ip = getattr(flow, 'dst_ip', None)
+                if src_ip in self.blocked_ips or dst_ip in self.blocked_ips:
+                    print(f"Skipping flow involving blocked IP: {src_ip} -> {dst_ip}")
+                    continue
+
                 # Process the flow for security analysis
                 risk_score = self.analyze_flow(flow)
-                
+
                 # Update the UI
                 self.root.after(0, lambda f=flow, rs=risk_score: self.update_flow_ui(f, rs))
-                  # Queue this flow for packet analysis - less restrictive criteria
-                should_analyze = True  # Default to analyzing all flows to ensure we see activity
-                
-                # Create a flow key for tracking
-                flow_key = self._create_flow_key(flow)
-                
-                print(f"Flow detected: {flow_key} with risk score {risk_score}")
-                
-                # Create message about the flow properties for debugging
-                flow_props = []
-                if hasattr(flow, 'application_name'):
-                    flow_props.append(f"app={flow.application_name}")
-                if hasattr(flow, 'bidirectional_packets'):
-                    flow_props.append(f"packets={flow.bidirectional_packets}")
-                if hasattr(flow, 'bidirectional_bytes'):
-                    flow_props.append(f"bytes={flow.bidirectional_bytes}")
-                
-                print(f"Flow properties: {', '.join(flow_props)}")
-                
-                # Queue for packet analysis
+
+                # Queue this flow for packet analysis - less restrictive criteria
                 self.flow_packet_queue.put({
                     'flow': flow,
-                    'flow_key': flow_key,
+                    'flow_key': self._create_flow_key(flow),
                     'risk_score': risk_score,
                     'timestamp': datetime.now()
                 })
-                print(f"Added flow to analysis queue: {flow_key}")
-                
+
         except Exception as e:
             print(f"Error in NFStream monitoring: {e}")
             error_msg = str(e)
-            self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"NFStream error: {msg}"))      
-              
+            self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"NFStream error: {msg}"))
 
     def pyshark_monitor(self):
         """Pyshark monitoring process for detailed packet analysis"""
         try:
-            # Only create a single capture instance to avoid spawning too many dumpcap processes
             interface_name = self.interface['pyshark_name']
             print(f"Starting PyShark monitoring on interface: {interface_name}")
-            
-            # Each thread needs its own event loop
-            try:
-                # Set a clean new event loop for this thread
-                if hasattr(asyncio, 'get_event_loop') and hasattr(asyncio, 'set_event_loop'):
-                    try:
-                        old_loop = asyncio.get_event_loop()
-                        if old_loop.is_running() or old_loop.is_closed():
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                    except Exception:
-                        # If we can't get the current loop, create a new one
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                else:
-                    # Python 3.10+ style
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                
-                print(f"Successfully created event loop for PyShark")
-                  # Create a capture instance with a specific BPF filter to avoid certain noisy protocols
-                bpf_filter = "not broadcast and not multicast and not arp"
-                
-                # Always use live capture mode for production
-                print(f"Starting live capture on interface: {interface_name}")
-                capture = pyshark.LiveCapture(
-                    interface=interface_name,
-                    bpf_filter=bpf_filter,
-                    display_filter="ip",  # Only show IP packets
-                    use_json=True,
-                    include_raw=True
-                )
-                    
-                # Register this capture for cleanup
-                with self.active_captures_lock:
-                        self.active_captures.append({
-                            'id': 'main_capture',
-                            'capture': capture,
-                            'loop': loop
-                        })
-                    
-                # Keep sniffing packets in small batches
-                packets_processed = 0
-                while self.is_monitoring:
-                        try:
-                            # Sniff a small batch with timeout
-                            capture.sniff(packet_count=10, timeout=2)
-                            batch_packets = list(capture._packets) if hasattr(capture, '_packets') else []
-                              # Process captured packets
-                            for packet in batch_packets:
-                                if not self.is_monitoring:
-                                    break
-                                
-                                # Process packet directly since queue_packet_for_processing doesn't exist
-                                self.analyze_packet(packet)
-                                packets_processed += 1
-                                
 
-                                # Provide feedback on packet processing
-                                if packets_processed % 20 == 0:
-                                    print(f"Processed {packets_processed} packets")
-                            
+            # Build a BPF filter to exclude blocked IPs
+            blocked_ips_filter = " and ".join([f"not host {ip}" for ip in self.blocked_ips])
+            bpf_filter = f"not broadcast and not multicast and not arp {(' and ' + blocked_ips_filter) if blocked_ips_filter else ''}"
 
-                            # Clear packets to avoid memory issues
-                            if hasattr(capture, '_packets'):
-                                capture._packets.clear()
-                                
+            # Create and set an event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-                            # Short delay to prevent CPU thrashing
-                            time.sleep(0.1)
-                            
-                        except KeyboardInterrupt:
-                            print("PyShark capture interrupted")
-                            break
-                        except Exception as batch_err:
-                            print(f"Error in packet batch processing: {batch_err}")
-                            time.sleep(1)  # Back off on errors
-                            if not self.is_monitoring:
-                                break
-                
-                print("PyShark monitoring completed")
-            
-            except Exception as inner_e:
-                print(f"PyShark capture failed: {inner_e}")
-                error_msg = str(inner_e)
-                if "Event loop is closed" in error_msg:
-                    print("Event loop was closed - this is expected during shutdown")
-                elif "Permission denied" in error_msg:
-                    error_msg = "Permission denied capturing packets. Try running the application as administrator."
-                    self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", msg))
-                else:
-                    print("Disabling PyShark monitoring due to initialization error")
-                    self.root.after(0, lambda msg=error_msg: messagebox.showwarning("Warning", f"Packet analysis disabled: {msg}"))
-                
+            capture = pyshark.LiveCapture(
+                interface=interface_name,
+                bpf_filter=bpf_filter,
+                display_filter="ip",  # Only show IP packets
+                use_json=True,
+                include_raw=True
+            )
+
+            # Register this capture for cleanup
+            with self.active_captures_lock:
+                self.active_captures.append({
+                    'id': 'main_capture',
+                    'capture': capture,
+                    'loop': loop
+                })
+
+            # Process packets
+            for packet in capture.sniff_continuously():
+                if not self.is_monitoring:
+                    break
+
+                self.analyze_packet(packet)
+
         except Exception as e:
             print(f"Error in PyShark monitoring: {e}")
-            if self.is_monitoring:  # Only show error if still monitoring
+            if self.is_monitoring:
                 self.root.after(0, lambda msg=str(e): messagebox.showerror("Error", f"PyShark error: {msg}"))
 
 
@@ -1052,6 +984,7 @@ class NetworkMonitor:
                 error_msg = str(e)
                 self.root.after(0, lambda msg=error_msg: messagebox.showerror("Error", f"Packet capture error: {msg}"))
                   
+
     def analyze_packet(self, packet):
         """Analyze a packet for security issues and update UI"""
         try:
@@ -1174,67 +1107,48 @@ class NetworkMonitor:
             # Look for suspicious patterns in the payload
             if hasattr(packet, 'tcp') and hasattr(packet.tcp, 'payload'):
                 payload = packet.tcp.payload
-                
+
                 # Check for suspicious patterns
-                for pattern in self.suspicious_patterns:
+                for pattern in self.suspicious_patterns + self.moderate_suspicious_payloads:
                     if re.search(pattern, payload):
-                        # Found a suspicious pattern - always use HIGH severity for payload matches
                         alert_details = {
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "severity": "High",
+                            "severity": "High" if pattern in self.suspicious_patterns else "Medium",
                             "source": src_ip,
                             "destination": dst_ip,
                             "alert_type": "Malicious Payload",
                             "details": f"Suspicious pattern detected: {pattern}"
                         }
                         self.root.after(0, lambda a=alert_details: self.add_alert(a))
-                        
-                        # Auto-respond if enabled
+
                         if self.auto_response_var.get():
                             self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Suspicious payload"))
                         break
-                          # Check for suspicious DNS queries
+
+            # Check for suspicious DNS queries
             if hasattr(packet, 'dns') and hasattr(packet.dns, 'qry_name'):
-                try:
-                    dns_query = str(packet.dns.qry_name).lower()
-                    
-                    # Check if this packet involves a blocked DNS server (either source or destination)
-                    # This handles the case where an IP was blocked but DNS queries are still coming through
-                    if dst_ip in self.blocked_ips and hasattr(packet, 'udp') and hasattr(packet.udp, 'dstport') and packet.udp.dstport == '53':
-                        print(f"Blocking DNS query to blocked server {dst_ip}")
-                        # For DNS, we need to drop all future packets rather than just sending RST
-                        # No need to send another alert since the IP is already blocked
-                        return
-                        
-                    # Check if this is a query for a known malicious domain
-                    for domain in self.threat_domains:
-                        if domain.lower() in dns_query:
-                            alert_details = {
-                                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "severity": "High", 
-                                "source": src_ip,
-                                "destination": dst_ip,
-                                "alert_type": "Malicious DNS Query",
-                                "details": f"Query for known malicious domain: {dns_query}"
-                            }
-                            self.root.after(0, lambda a=alert_details: self.add_alert(a))
-                            
-                            # Auto-respond if enabled and set to Block IP
-                            if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
-                                # Only block the source IP (client making the query)
-                                self.root.after(0, lambda ip=src_ip: self.block_ip(ip, f"DNS query for malicious domain: {dns_query}"))
-                                # No longer block the DNS server
-                            break
-                except Exception as dns_error:
-                    print(f"Error processing DNS query check: {dns_error}")
-                    # Continue processing other aspects of the packet even if DNS check fails
-            
+                dns_query = str(packet.dns.qry_name).lower()
+                for domain in self.threat_domains:
+                    if domain.lower() in dns_query:
+                        alert_details = {
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "severity": "High",
+                            "source": src_ip,
+                            "destination": dst_ip,
+                            "alert_type": "Malicious DNS Query",
+                            "details": f"Query for known malicious domain: {dns_query}"
+                        }
+                        self.root.after(0, lambda a=alert_details: self.add_alert(a))
+
+                        if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
+                            self.root.after(0, lambda ip=src_ip: self.block_ip(ip, f"DNS query for malicious domain: {dns_query}"))
+                        break
+
             # Check for HTTP suspicious user agents
             if hasattr(packet, 'http') and hasattr(packet.http, 'user_agent'):
                 user_agent = packet.http.user_agent
-                for pattern in self.suspicious_patterns:
-                    if re.search(pattern, user_agent):
-                        # User agent matches are now HIGH severity to match Scapy's alerts
+                for agent in self.suspicious_user_agents:
+                    if agent in user_agent:
                         alert_details = {
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "severity": "High",
@@ -1244,44 +1158,14 @@ class NetworkMonitor:
                             "details": f"Suspicious user agent: {user_agent}"
                         }
                         self.root.after(0, lambda a=alert_details: self.add_alert(a))
-                        
-                        # Auto-respond to suspicious user agents the same as payloads
+
                         if self.auto_response_var.get():
                             self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Suspicious user agent"))
-            
-            # Also check if IP is in our threat list (consistent with flow analysis)
-            if src_ip in self.threat_ips:
-                alert_details = {
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "severity": "High",
-                    "source": src_ip,
-                    "destination": dst_ip,
-                    "alert_type": "Malicious Source IP",
-                    "details": f"Packet from known malicious IP: {src_ip}"
-                }
-                self.root.after(0, lambda a=alert_details: self.add_alert(a))
-                  # Auto-block if auto-respond is enabled and default response is Block IP
-                if self.auto_response_var.get() and self.default_response_var.get() == "Block IP":
-                    self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Malicious source IP - auto-blocked"))
-            
-            if dst_ip in self.threat_ips:
-                alert_details = {
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "severity": "High",
-                    "source": src_ip,
-                    "destination": dst_ip,
-                    "alert_type": "Malicious Destination IP",
-                    "details": f"Packet to known malicious IP: {dst_ip}"
-                }
-                self.root.after(0, lambda a=alert_details: self.add_alert(a))
-                
-                # Auto-block source IP even when destination is malicious (as requested)
-                if self.auto_response_var.get():
-                    self.root.after(0, lambda ip=src_ip: self.block_ip(ip, "Source of traffic to malicious destination - auto-blocked"))
-                    
+                        break
+
         except Exception as e:
             print(f"Error checking packet payload: {e}")
-            
+
     def show_packet_details(self, event):
         """Show detailed information about the selected packet"""
         selected_items = self.packets_tree.selection()
@@ -1367,7 +1251,7 @@ class NetworkMonitor:
                         if flag_int & 0x04: flags.append('RST')
                         if flag_int & 0x08: flags.append('PSH')
                         if flag_int & 0x20: flags.append('URG')
-                    # String representation like '......S.'
+                    # String representation like '......S.' 
                     elif len(flag_value) >= 8:
                         if 'S' in flag_value: flags.append('SYN')
                         if 'A' in flag_value: flags.append('ACK')
@@ -1591,7 +1475,7 @@ class NetworkMonitor:
                                 self.packet_details_text.insert(tk.END, f"  Data available in '{attr_name}' field\n")
                                 found_data = True
                                 break
-                    
+                            
                     if not found_data:
                         self.packet_details_text.insert(tk.END, "  Raw data structure available but format cannot be displayed\n")
             except Exception as e:
@@ -1658,9 +1542,7 @@ class NetworkMonitor:
                         displayed_something = True
 
                 # Look for additional TLS fields that might exist
-                for attr in ['record_content_type', 'handshake_version', 'cipher_suite', 
-                             'extension_type', 'server_name', 'handshake_certificate',
-                             'handshake_session_id', 'handshake_random_time']:
+                for attr in ['packet_number', 'payload_length', 'flags']:
                     if attr in tls_attributes:
                         try:
                             value = getattr(packet.tls, attr)
@@ -1763,6 +1645,7 @@ class NetworkMonitor:
         """Add an alert to the alerts tab"""
         # Add to tree
         item_id = self.alerts_tree.insert("", 0, values=(
+
             alert_details["time"],
             alert_details["severity"],
             alert_details["source"],
@@ -1770,7 +1653,7 @@ class NetworkMonitor:
             alert_details["alert_type"],
             alert_details["details"]
         ))
-        
+
         # Color code based on severity
         if alert_details["severity"] == "High":
             self.alerts_tree.item(item_id, tags=("high_severity",))
@@ -1778,7 +1661,7 @@ class NetworkMonitor:
             self.alerts_tree.item(item_id, tags=("medium_severity",))
         
         # Configure tag colors
-        self.alerts_tree.tag_configure("high_severity", background="#ffcccc")
+        self.alerts_tree.tag_configure("high_severity",background="#ffcccc")
         self.alerts_tree.tag_configure("medium_severity", background="#ffffcc")
         
         # Switch to alerts tab to show new alert
@@ -1788,13 +1671,16 @@ class NetworkMonitor:
         self.root.bell()    
           
     def send_reset_packets(self, ip):
-        """Send TCP reset packets to an IP address to terminate connections"""
+        """Send TCP reset packets to an IPaddress to terminate connections"""
         try:
             # Use the local interface for sending packets
             iface = self.interface['scapy_name']
             
+            print(f"Sending TCP reset packets to {ip} on interface {iface}")
+            
             # Create a TCP Reset packet with flags="R" to multiple common ports
             # This will reset any active connections to these ports
+            
             common_ports = [80, 443, 22, 21, 25, 110, 143, 3389, 8080]
             for port in common_ports:
                 # Create a packet with the Reset flag set
@@ -1815,13 +1701,12 @@ class NetworkMonitor:
             print(f"Sent TCP RST packets to {ip} on common ports")
         except Exception as e:
             print(f"Error sending reset packets: {e}")
-    
     def block_ip(self, ip, reason):
         """Block an IP address"""
         if ip in self.blocked_ips:
             return  # Already blocked
         
-        # Validate IP address before blocking to avoid crashes
+        # Validate IP address beforeblocking to avoid crashes
         try:
             # Check if it's a valid IP
             ipaddress.ip_address(ip)
@@ -1836,16 +1721,20 @@ class NetworkMonitor:
                 reason
             ))
             
-            # Send TCP RST packets using Scapy to terminate connections
+            # Send TCP RST packets to terminate existing connections to this IP
             try:
                 print(f"Blocking {ip} with RST packets")
                 self.send_reset_packets(ip)
             except Exception as e:
                 print(f"Error sending reset packets: {e}")
+            
+            # Update BPF filters for all capturing interfaces
+            self.update_capture_filters()
                 
             # Ensure proper refresh of the UI
             self.root.update_idletasks()
             
+            print(f"Successfully blocked IP {ip} across all interfaces")
             return True
         except ValueError:
             print(f"Invalid IP address format: {ip}, could not block")
@@ -1861,7 +1750,7 @@ class NetworkMonitor:
         """Unblock the selected IP address"""
         selected_items = self.blocked_tree.selection()
         if not selected_items:
-            messagebox.showinfo("Info", "No IP selected")
+            print("No items selected")
             return
         
         item_id = selected_items[0]
@@ -1873,8 +1762,7 @@ class NetworkMonitor:
         
         # Remove from UI
         self.blocked_tree.delete(item_id)
-        
-        messagebox.showinfo("Unblock", f"IP {ip} has been unblocked")
+        print(f"Unblocked IP: {ip}")
     
     def execute_response(self):
         """Execute the selected response action for the selected alert"""
@@ -2030,7 +1918,6 @@ class NetworkMonitor:
         return min(100, risk_score)
     
     
-    
     def update_flow_ui(self, flow, risk_score):
         """Update the UI with flow information"""
         if not self.is_monitoring:
@@ -2116,22 +2003,30 @@ class NetworkMonitor:
             return f"Error checking alerts: {e}"
             
         return "No alerts for this packet"
-
-    def _create_flow_key(self, flow):
-        """Create a unique key for tracking a flow"""
-        # Extract the flow 5-tuple (IPs, ports, protocol)
-        src_ip = getattr(flow, 'src_ip', 'unknown')
-        dst_ip = getattr(flow, 'dst_ip', 'unknown')
-        src_port = getattr(flow, 'src_port', 0)
-        dst_port = getattr(flow, 'dst_port', 0)
-        protocol = getattr(flow, 'protocol', 0)
         
-        # Create a consistent key regardless of direction
-        if src_ip < dst_ip or (src_ip == dst_ip and src_port < dst_port):
-            return f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}"
-        else:
-            return f"{dst_ip}:{dst_port}-{src_ip}:{src_port}-{protocol}"
-
+    def _create_flow_key(self, flow):
+        """Create a unique key for tracking a flow with enhanced IPv6 support"""
+        try:
+            # Extract the flow 5-tuple (IPs, ports, protocol)
+            src_ip = getattr(flow, 'src_ip', 'unknown')
+            dst_ip = getattr(flow, 'dst_ip', 'unknown')
+            src_port = getattr(flow, 'src_port', 0)
+            dst_port = getattr(flow, 'dst_port', 0)
+            protocol = getattr(flow, 'protocol', 0)
+            
+            # Create a safe, consistent key format that works with both IPv4 and IPv6
+            # Avoid string comparison issues by using a prefix
+            flow_id = f"flow-src-{src_ip}-{src_port}-dst-{dst_ip}-{dst_port}-proto-{protocol}"
+            
+            return flow_id
+            
+        except Exception as e:
+            # Create a fallback key that's guaranteed to be unique
+            print(f"Error creating flow key: {e}")
+            import random
+            import time
+            return f"flow-{time.time()}-{random.randint(1000, 9999)}"    
+    
     def analyze_flow_packets(self, flow_data):
         """Analyze packets for a specific flow using PyShark
         
@@ -2141,19 +2036,28 @@ class NetworkMonitor:
         Args:
             flow_data (dict): Dictionary containing flow information
         """
+        # Define variables outside the try block so they're accessible in finally
+        loop = None
+        capture = None
+        capture_id = str(uuid.uuid4())[:8]  # Generate a unique ID for this capture
+        
         try:
-            # Extract flow data
-            flow = flow_data['flow']
-            flow_key = flow_data['flow_key']
-            risk_score = flow_data['risk_score']
+            # Extract flow data safely with defaults
+            flow = flow_data.get('flow')
+            risk_score = flow_data.get('risk_score', 0)
             
-            src_ip = getattr(flow, 'src_ip', None)
-            dst_ip = getattr(flow, 'dst_ip', None)
-            src_port = getattr(flow, 'src_port', None)
-            dst_port = getattr(flow, 'dst_port', None)
-            protocol = getattr(flow, 'protocol', None)
+            if not flow:
+                print("Missing flow data, cannot analyze")
+                return
+                
+            # Extract flow parameters with safe defaults
+            src_ip = getattr(flow, 'src_ip', 'unknown')
+            dst_ip = getattr(flow, 'dst_ip', 'unknown')
+            src_port = getattr(flow, 'src_port', 0)
+            dst_port = getattr(flow, 'dst_port', 0)
+            protocol = getattr(flow, 'protocol', 0)
             
-            if not (src_ip and dst_ip):
+            if src_ip == 'unknown' or dst_ip == 'unknown':
                 print(f"Missing IP information for flow analysis: {src_ip} -> {dst_ip}")
                 return
                 
@@ -2163,23 +2067,22 @@ class NetworkMonitor:
                 proto_name = "tcp"
             elif protocol == 17:
                 proto_name = "udp"
-            elif protocol == 1:
+            elif protocol == 1 or protocol == 58:  # Handle both ICMP and ICMPv6
                 proto_name = "icmp"
             
             # Build capture filter
-            capture_filter = ""
-            
-            # Create bidirectional filter
+            # Create bidirectional filter that works for both IPv4 and IPv6
             filter_a_to_b = f"host {src_ip} and host {dst_ip}"
             
-            if src_port and dst_port:
-                if proto_name in ["tcp", "udp"]:
-                    filter_a_to_b += f" and {proto_name} port {src_port} and {proto_name} port {dst_port}"
+            if src_port and dst_port and proto_name in ["tcp", "udp"]:
+                filter_a_to_b += f" and {proto_name} port {src_port} and {proto_name} port {dst_port}"
                     
             capture_filter = filter_a_to_b
             
             print(f"PyShark analyzing flow: {src_ip}:{src_port} <-> {dst_ip}:{dst_port} ({proto_name})")
-            print(f"Using filter: {capture_filter}")            # Create and set an event loop for this thread - CRITICAL FOR PYSHARK
+            print(f"Using filter: {capture_filter}")
+            
+            # Create and set an event loop for this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
@@ -2194,27 +2097,29 @@ class NetworkMonitor:
                 debug=False   # Disable debug to reduce noise
             )
             
-            # Register this capture for proper cleanup later
+            # Register this capture for proper cleanup later - use ID instead of flow key
             with self.active_captures_lock:
                 self.active_captures.append({
+                    'id': capture_id,
                     'capture': capture,
-                    'loop': loop,
-                    'flow_key': flow_key
+                    'loop': loop
                 })
             
             # Check if we should still be monitoring - exit early if monitoring was stopped
             if not self.is_monitoring:
-                print(f"Monitoring stopped, aborting capture for flow {flow_key}")
+                print(f"Monitoring stopped, aborting capture {capture_id}")
                 return
-              # Capture packets using a synchronous approach with better error handling
+                
+            # Capture packets using a synchronous approach with better error handling
             try:
                 packet_count = 0
                 # Use a small timeout and reduced packet count to be more responsive to shutdown signals
                 capture.sniff(timeout=3, packet_count=20)
-                      # Process captured packets - checking monitoring state before each operation
+                
+                # Process captured packets - checking monitoring state before each operation
                 try:
                     if not self.is_monitoring:
-                        print(f"Monitoring stopped during packet processing for flow {flow_key}")
+                        print(f"Monitoring stopped during packet processing for capture {capture_id}")
                         return
                     
                     # Create a local copy of packets to process to avoid any potential async issues
@@ -2228,125 +2133,49 @@ class NetworkMonitor:
                     for packet in packets:
                         # Check if monitoring was stopped during packet processing
                         if not self.is_monitoring:
-                            print(f"Monitoring stopped during packet processing for flow {flow_key}")
+                            print(f"Monitoring stopped during packet processing for capture {capture_id}")
                             break
                             
                         packet_count += 1
                         # Use a reference to the packet and perform UI updates in main thread
                         # Make a shallow copy of the reference to further isolate from the original capture
                         packet_ref = packet  # Create a reference to avoid capture issues
-                        self.root.after(0, lambda p=packet_ref: self.analyze_flow_specific_packet(p, flow_key))
+                        self.root.after(0, lambda p=packet_ref: self.analyze_flow_specific_packet(p, proto_name))
                         
-                    print(f"Processed {packet_count} packets for flow {flow_key}")
+                    print(f"Processed {packet_count} packets for capture {capture_id}")
                 except Exception as packet_err:
                     print(f"Error processing packet in targeted capture: {packet_err}")
                 
-                print(f"Completed targeted capture for flow {flow_key}: {packet_count} packets captured")
+                print(f"Completed targeted capture {capture_id}: {packet_count} packets captured")
                 
             except KeyboardInterrupt:
                 print("Capture stopped by user")
             except Exception as sniff_error:
                 if "Event loop is closed" in str(sniff_error):
-                    print(f"Event loop was closed during capture for flow {flow_key} - this is expected during shutdown")
+                    print(f"Event loop was closed during capture {capture_id} - this is expected during shutdown")
                 else:
-                    print(f"Error during packet sniffing for flow {flow_key}: {sniff_error}")
-            finally:
-                # Clean up resources safely
-                try:
-                    # Remove this capture from active captures
-                    with self.active_captures_lock:
-                        self.active_captures = [c for c in self.active_captures if c['flow_key'] != flow_key]
+                    print(f"Error during packet sniffing for capture {capture_id}: {sniff_error}")
                     
-                    # Close the event loop if it's still open
-                    if loop and not loop.is_closed():
-                        loop.close()
-                except Exception as cleanup_error:
-                    print(f"Error cleaning up capture resources for flow {flow_key}: {cleanup_error}")
-            
         except Exception as e:
             print(f"Error in targeted packet capture: {e}")
             
-            # Ensure cleanup if an error occurs
+        finally:
+            # Clean up resources safely
             try:
-                # Remove this capture from active captures
+                # Remove this capture from active captures - use the capture ID approach
                 with self.active_captures_lock:
-                    self.active_captures = [c for c in self.active_captures if c['flow_key'] != flow_key]
+                    self.active_captures = [c for c in self.active_captures if c.get('id') != capture_id]
                 
                 # Close the event loop if it's still open
                 if loop and not loop.is_closed():
-                    loop.close()
-            except Exception:
-                pass  # Ignore cleanup errors during exception handling
+                    try:
+                        loop.close()
+                    except Exception as loop_err:
+                        print(f"Error closing event loop: {loop_err}")
+                        
+            except Exception as cleanup_error:
+                print(f"Error cleaning up capture resources: {cleanup_error}")
     
-    def analyze_flow_specific_packet(self, packet, flow_key):
-        """Analyze a packet specifically for a tracked flow
-        
-        Args:
-            packet: PyShark packet object
-            flow_key (str): Flow tracking key for context
-        """
-        try:
-            # Get flow data for context
-            with self.flow_tracking_lock:
-                if flow_key not in self.flow_tracking:
-                    return
-                flow_data = self.flow_tracking[flow_key]
-                risk_score = flow_data.get('risk_score', 0)
-            
-            # Extract packet information
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            
-            # Get source and destination
-            src = "Unknown"
-            dst = "Unknown"
-            protocol = packet.highest_layer
-            length = packet.length
-            info = self.get_packet_summary(packet)
-            
-            # Extract IP addresses if available
-            if hasattr(packet, 'ip'):
-                src = packet.ip.src
-                dst = packet.ip.dst
-            elif hasattr(packet, 'ipv6'):
-                src = packet.ipv6.src
-                dst = packet.ipv6.dst
-            
-            # Add flow context to packet info
-            info = f"[Flow: {flow_key}] {info}"
-            
-            # Store packet for later reference with special key indicating flow context
-            packet_id = f"{timestamp}_{src}_{dst}_flow_{flow_key}"
-            
-            # Add to UI with flow context
-            packet_data = (timestamp, src, dst, protocol, length, info)
-            
-            # Store packet and add to UI
-            self.packet_store[packet_id] = packet
-            item_id = self.packets_tree.insert("", "end", values=packet_data)
-            self.packets_tree.item(item_id, tags=(packet_id,))
-            
-            # Apply special styling for flow-specific packets
-            if risk_score >= 80:
-                self.packets_tree.item(item_id, tags=(packet_id, "high_risk_flow"))
-            elif risk_score >= 40:
-                self.packets_tree.item(item_id, tags=(packet_id, "medium_risk_flow"))
-            else:
-                self.packets_tree.item(item_id, tags=(packet_id, "low_risk_flow"))
-                
-            # Configure tags
-            self.packets_tree.tag_configure("high_risk_flow", background="#ffcccc")
-            self.packets_tree.tag_configure("medium_risk_flow", background="#ffffcc")
-            self.packets_tree.tag_configure("low_risk_flow", background="#e6f2ff")
-            
-            # Check packet payload for malicious content
-            self.check_packet_payload(packet, src, dst)
-            
-            # Auto-scroll to show latest
-            self.packets_tree.see(item_id)
-            
-        except Exception as e:
-            print(f"Error analyzing flow-specific packet: {e}")    
-            
     def kill_pyshark_processes(self):
         """Force-kill any PyShark dumpcap processes that might still be running"""
         try:
@@ -2421,4 +2250,33 @@ class NetworkMonitor:
             
         except Exception as e:
             print(f"Error killing PyShark processes: {e}")
+
+    def update_capture_filters(self):
+        """Update BPF filters for all capture devices to enforce blocked IP list"""
+        if not self.is_monitoring or not self.blocked_ips:
+            return  # Nothing to do if not monitoring or no IPs are blocked
+        
+        try:
+            print(f"Updating capture filters to enforce {len(self.blocked_ips)} blocked IPs")
+            
+            # Build a BPF filter to exclude all blocked IPs
+            blocked_ips_filter = " and ".join([f"not host {ip}" for ip in self.blocked_ips])
+            
+            # Update PyShark captures
+            with self.active_captures_lock:
+                for capture_info in self.active_captures:
+                    if 'capture' in capture_info:
+                        capture = capture_info['capture']
+                        try:
+                            # Try to update the capture filter if possible
+                            if hasattr(capture, 'set_filter'):
+                                bpf_filter = f"not broadcast and not multicast and not arp {(' and ' + blocked_ips_filter) if blocked_ips_filter else ''}"
+                                capture.set_filter(bpf_filter)
+                                print(f"Updated filter for capture {capture_info.get('id', 'unknown')}")
+                        except Exception as e:
+                            print(f"Error updating capture filter: {e}")
+            
+            print("Capture filters updated successfully")
+        except Exception as e:
+            print(f"Error updating capture filters: {e}")
 
