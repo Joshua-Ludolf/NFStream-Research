@@ -19,6 +19,10 @@ active_captures = []
 active_captures_lock = threading.Lock()
 nfstream_streamer = None  # Global reference to NFStream streamer
 
+# Add global set for blocked IPs that will be used across all monitoring methods
+BLOCKED_IPS = set()
+IP_BLOCK_LOCK = threading.Lock()
+
 try:
     # Try to import NFStream for flow-based analysis
     import nfstream
@@ -270,6 +274,16 @@ def nfstream_monitor(interface_name):
                     print(f"Processed {flow_count} flows")
                 
                 try:
+                    # Get source IP address from flow
+                    src_ip = getattr(flow, 'src_ip', "unknown")
+                    dst_ip = getattr(flow, 'dst_ip', "unknown")
+                    
+                    # Check if the source IP is blocked - if so, drop the flow
+                    with IP_BLOCK_LOCK:
+                        if src_ip in BLOCKED_IPS:
+                            print(f"🛑 NFStream dropping flow from blocked IP: {src_ip} -> {dst_ip}")
+                            continue  # Skip this flow
+                    
                     # Calculate a risk score for the flow
                     risk_score = calculate_flow_risk(flow)
                     
@@ -600,7 +614,13 @@ def process_packet(packet, packet_counter):
         elif hasattr(packet, 'ipv6'):
             src_ip = packet.ipv6.src
             dst_ip = packet.ipv6.dst
-        
+            
+        # Check if source IP is blocked - if so, drop the packet
+        with IP_BLOCK_LOCK:
+            if src_ip in BLOCKED_IPS:
+                print(f"🛑 PyShark dropping packet from blocked IP: {src_ip} -> {dst_ip}")
+                return  # Drop the packet by returning early
+                
         # Create a simple summary
         summary = f"{protocol} packet"
         if hasattr(packet, 'highest_layer'):
@@ -751,3 +771,60 @@ def calculate_flow_risk(flow):
     
     # Cap the risk score at 100
     return min(risk_score, 100)
+
+def update_blocked_ips(ip_set):
+    """Update the global blocked IPs set from Scapy's list
+    
+    Args:
+        ip_set (set): Set of IP addresses to block
+    """
+    with IP_BLOCK_LOCK:
+        BLOCKED_IPS.clear()
+        BLOCKED_IPS.update(ip_set)
+    print(f"Updated blocked IPs list for monitoring - {len(BLOCKED_IPS)} IPs blocked")
+    
+def get_blocked_ips():
+    """Get the current set of blocked IPs
+    
+    Returns:
+        set: Set of currently blocked IP addresses
+    """
+    with IP_BLOCK_LOCK:
+        return set(BLOCKED_IPS)  # Return a copy of the set
+
+def block_ip_in_monitoring(ip):
+    """Add an IP address to the blocked list
+    
+    Args:
+        ip (str): IP address to block
+        
+    Returns:
+        bool: True if successful
+    """
+    try:
+        with IP_BLOCK_LOCK:
+            BLOCKED_IPS.add(ip)
+        print(f"Added {ip} to monitoring blocked IPs list")
+        return True
+    except Exception as e:
+        print(f"Error adding IP to monitoring block list: {e}")
+        return False
+        
+def unblock_ip_in_monitoring(ip):
+    """Remove an IP address from the blocked list
+    
+    Args:
+        ip (str): IP address to unblock
+        
+    Returns:
+        bool: True if successful
+    """
+    try:
+        with IP_BLOCK_LOCK:
+            if ip in BLOCKED_IPS:
+                BLOCKED_IPS.remove(ip)
+        print(f"Removed {ip} from monitoring blocked IPs list")
+        return True
+    except Exception as e:
+        print(f"Error removing IP from monitoring block list: {e}")
+        return False
